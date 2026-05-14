@@ -22,3 +22,4 @@ env/
 .DS_Store
 .mcpdocs/
 dokumen-pintar.config.json
+dokumen_pintar-*/
