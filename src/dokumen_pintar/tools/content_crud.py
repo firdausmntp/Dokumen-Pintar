@@ -11,7 +11,14 @@ from ..context import AppContext
 from ..errors import HandlerError, UnsupportedFormatError, ValidationError
 from ..utils.encoding import read_text, write_text
 from ..utils.locks import file_lock
-from ._common import handler_for, resolve_for_read, resolve_for_write, summarize_resolved
+from ._common import (
+    BINARY_CONTAINER_FORMATS,
+    handler_for,
+    refuse_binary_text_op,
+    resolve_for_read,
+    resolve_for_write,
+    summarize_resolved,
+)
 
 
 def register(mcp: FastMCP, ctx: AppContext) -> None:
@@ -75,17 +82,39 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         ),
     )
     def content_write(path: str, content: str, encoding: str = "utf-8") -> dict[str, Any]:
+        from ..handlers.base import HandlerCapability
+
         resolved = resolve_for_write(ctx, path)
+        # Refuse mutating an existing binary container (docx/xlsx/pptx/pdf)
+        # via raw-text write. Creating a brand-new docx is still allowed
+        # because DocxHandler.write_text can synthesize one from paragraphs.
+        refuse_binary_text_op(ctx, resolved, "content_write")
         with file_lock(resolved.absolute):
             _snapshot(resolved, "content_write_pre")
             handler = ctx.registry.for_path(resolved.absolute)
-            if handler is not None and resolved.absolute.exists():
+            resolved.absolute.parent.mkdir(parents=True, exist_ok=True)
+            if handler is not None and HandlerCapability.WRITE_TEXT in handler.capabilities:
+                # Use the handler's format-aware writer so JSON/YAML stay
+                # valid, CSV preserves delimiters, and a new docx is built
+                # via python-docx rather than written as raw bytes.
                 try:
                     handler.write_text(resolved.absolute, content, encoding=encoding)
                 except UnsupportedFormatError:
+                    # Defensive fallback for text-like handlers that opt out at
+                    # runtime. Safe here because binary container formats were
+                    # already refused above (refuse_binary_text_op + elif below).
+                    if handler.name in BINARY_CONTAINER_FORMATS:
+                        raise
                     write_text(resolved.absolute, content, encoding=encoding)
+            elif handler is not None and handler.name in {"xlsx", "pptx", "pdf"}:
+                # Binary container with no WRITE_TEXT capability — refuse
+                # rather than fall back to a raw byte write that would
+                # produce a non-conforming file with a binary extension.
+                raise UnsupportedFormatError(
+                    f"content_write: {handler.name} has no write_text support; "
+                    "use struct_set or a dedicated tool to build the file."
+                )
             else:
-                resolved.absolute.parent.mkdir(parents=True, exist_ok=True)
                 write_text(resolved.absolute, content, encoding=encoding)
             snap = _snapshot(resolved, "content_write_post")
         ctx.audit.log("content_write", path=str(resolved.absolute), root=resolved.root.name)
@@ -97,6 +126,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     )
     def content_append(path: str, content: str) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
+        refuse_binary_text_op(ctx, resolved, "content_append")
         with file_lock(resolved.absolute):
             existing, used_enc = (
                 _read_for_text(resolved)
@@ -120,6 +150,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         if line_number < 1:
             raise ValidationError("line_number must be >= 1")
         resolved = resolve_for_write(ctx, path)
+        refuse_binary_text_op(ctx, resolved, "content_insert")
         with file_lock(resolved.absolute):
             existing, used_enc = (
                 _read_for_text(resolved)
@@ -151,6 +182,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         regex: bool = False,
     ) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
+        refuse_binary_text_op(ctx, resolved, "content_replace")
         with file_lock(resolved.absolute):
             text, used_enc = _read_for_text(resolved)
             if regex:
@@ -181,6 +213,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         if start_line < 1 or end_line < start_line:
             raise ValidationError("invalid line range")
         resolved = resolve_for_write(ctx, path)
+        refuse_binary_text_op(ctx, resolved, "content_delete_range")
         with file_lock(resolved.absolute):
             text, used_enc = _read_for_text(resolved)
             lines = text.splitlines(keepends=True)
@@ -206,6 +239,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     )
     def content_patch(path: str, unified_diff: str) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
+        refuse_binary_text_op(ctx, resolved, "content_patch")
         with file_lock(resolved.absolute):
             text, used_enc = _read_for_text(resolved)
             patched = _apply_unified_diff(text, unified_diff)

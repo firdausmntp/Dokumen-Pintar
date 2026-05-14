@@ -16,6 +16,21 @@ from ..utils.globbing import any_match, compile_globs
 from ..utils.locks import file_lock
 from ._common import resolve_for_write
 
+# Formats that are binary containers (ZIP, OLE, PDF) — never safe for raw
+# text find-and-replace, even though their handlers expose WRITE_TEXT
+# (which goes through the format-aware writer, not raw bytes).
+_BINARY_FORMATS = frozenset({"docx", "xlsx", "pptx", "pdf"})
+
+
+def _looks_binary(path: Path, sample_size: int = 8192) -> bool:
+    """Heuristic: file looks binary if first chunk contains a NUL byte."""
+    try:
+        with path.open("rb") as fh:
+            chunk = fh.read(sample_size)
+    except OSError:
+        return True
+    return b"\x00" in chunk
+
 
 def _iter_writable_files(ctx: AppContext, glob_pattern: str) -> list[tuple[str, Path, Path]]:
     """List (root_name, abs_path, root_abs) for files matching the glob in writable roots."""
@@ -101,19 +116,40 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         flags = 0 if case_sensitive else re.IGNORECASE
         pattern = re.compile(old if regex else re.escape(old), flags)
         plan: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        max_bytes = ctx.config.max_file_size_bytes
         for root_name, p, root_abs in _iter_writable_files(ctx, glob):
+            uri = f"{root_name}:/{p.relative_to(root_abs).as_posix()}"
             handler = ctx.registry.for_path(p)
             if handler is None:
+                skipped.append({"uri": uri, "reason": "no_handler"})
+                continue
+            # Refuse to mangle binary container formats (docx, xlsx, pptx, pdf).
+            if handler.name in _BINARY_FORMATS:
+                skipped.append({"uri": uri, "reason": "binary_format"})
+                continue
+            # Skip files that look binary (null bytes in head).
+            if _looks_binary(p):
+                skipped.append({"uri": uri, "reason": "binary_content"})
+                continue
+            # Skip oversized files to prevent regex hangs / memory blow-ups.
+            try:
+                if p.stat().st_size > max_bytes:
+                    skipped.append({"uri": uri, "reason": "exceeds_max_file_size"})
+                    continue
+            except OSError:
+                skipped.append({"uri": uri, "reason": "stat_failed"})
                 continue
             try:
                 text, used_enc = read_text(p, auto_detect=ctx.config.auto_detect_encoding)
             except OSError:
+                skipped.append({"uri": uri, "reason": "read_failed"})
                 continue
             new_text, n = pattern.subn(new, text)
             if n == 0:
                 continue
             entry: dict[str, Any] = {
-                "uri": f"{root_name}:/{p.relative_to(root_abs).as_posix()}",
+                "uri": uri,
                 "absolute": str(p),
                 "replacements": n,
             }
@@ -135,7 +171,10 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
                         action="batch_replace_post",
                     )
                 ctx.audit.log("batch_replace_content", **entry)
-        return {"dry_run": dry_run, "count": len(plan), "files": plan}
+        result: dict[str, Any] = {"dry_run": dry_run, "count": len(plan), "files": plan}
+        if skipped:
+            result["skipped"] = skipped
+        return result
 
     @mcp.tool(
         name="batch_delete",

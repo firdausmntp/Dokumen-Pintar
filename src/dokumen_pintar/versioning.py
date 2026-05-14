@@ -6,6 +6,7 @@ import hashlib
 import shutil
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Iterable
@@ -102,7 +103,7 @@ class VersionStore:
             "action": action,
             "note": note,
         }
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 "INSERT INTO versions(root_name, rel_path, snapshot_path, sha256, size, timestamp, action, note)"
                 " VALUES (?,?,?,?,?,?,?,?)",
@@ -123,7 +124,7 @@ class VersionStore:
         return record
 
     def list_versions(self, *, root_name: str, rel_path: str) -> list[dict]:
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT id, root_name, rel_path, snapshot_path, sha256, size, timestamp, action, note"
                 " FROM versions WHERE root_name=? AND rel_path=? ORDER BY id DESC",
@@ -132,7 +133,7 @@ class VersionStore:
         return [self._row_to_dict(r) for r in rows]
 
     def latest(self, *, root_name: str, rel_path: str) -> dict | None:
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT id, root_name, rel_path, snapshot_path, sha256, size, timestamp, action, note"
                 " FROM versions WHERE root_name=? AND rel_path=? ORDER BY id DESC LIMIT 1",
@@ -141,7 +142,7 @@ class VersionStore:
         return self._row_to_dict(row) if row else None
 
     def get(self, version_id: int) -> dict | None:
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT id, root_name, rel_path, snapshot_path, sha256, size, timestamp, action, note"
                 " FROM versions WHERE id=?",
@@ -171,7 +172,7 @@ class VersionStore:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         cutoff_str = cutoff.strftime("%Y-%m-%dT%H-%M-%S-%fZ")
         removed = 0
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 "SELECT id, snapshot_path FROM versions WHERE timestamp < ?",
                 (cutoff_str,),
@@ -210,7 +211,7 @@ class VersionStore:
         max_v = self._config.versioning.max_versions_per_file
         if max_v <= 0:
             return
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             ids = [
                 r[0]
                 for r in conn.execute(
@@ -231,7 +232,7 @@ class VersionStore:
                 conn.execute("DELETE FROM versions WHERE id=?", (vid,))
 
     def _init_db(self) -> None:
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:

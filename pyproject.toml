@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dokumen-pintar"
-version = "1.0.0"
+version = "1.0.1"
 description = "MCP server universal untuk CRUD dokumen lintas format (text, JSON, YAML, CSV, XML, DOCX, XLSX, PPTX, PDF) dengan versioning, sandboxed multi-root, search, batch, dan semantic search opsional."
 readme = "README.pypi.md"
 requires-python = ">=3.10"
@@ -54,7 +54,6 @@ semantic = [
 ]
 dev = [
     "pytest>=8.2",
-    "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
@@ -69,6 +68,7 @@ Documentation = "https://github.com/firdausmntp/Dokumen-Pintar/tree/main/docs"
 [project.scripts]
 dokumen-pintar = "dokumen_pintar.server:main"
 dokumen-pintar-init = "dokumen_pintar.cli:init_config"
+dokumen-pintar-doctor = "dokumen_pintar.cli:doctor"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -90,7 +90,6 @@ strict = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = [
     "-n", "auto",

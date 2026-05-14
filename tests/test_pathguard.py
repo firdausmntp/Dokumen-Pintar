@@ -245,6 +245,41 @@ def test_relative_path_not_in_any_root(make_config: Callable[..., AppConfig], tm
         guard.resolve("../../etc/passwd")
 
 
+def test_workspace_uri_dotdot_escape_blocked(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """B12 regression: workspace URI must enforce containment after .. normalization."""
+    from dokumen_pintar.pathguard import PathGuard
+
+    cfg = make_config()
+    guard = PathGuard(cfg)
+    with pytest.raises(PathNotAllowedError, match="outside root"):
+        guard.resolve("documents:/../../etc/passwd")
+
+
+def test_workspace_uri_symlink_to_outside_blocked(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """B12 regression: workspace URI must not allow symlink escape from the root."""
+    import os
+    from dokumen_pintar.pathguard import PathGuard
+
+    docs_dir, _ = tmp_roots
+    # Create a symlink inside the root pointing to an outside location.
+    outside = docs_dir.parent / "outside_target.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = docs_dir / "escape_link"
+    try:
+        os.symlink(outside, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform/user")
+    cfg = make_config()
+    guard = PathGuard(cfg)
+    # Resolving documents:/escape_link should refuse since the target is outside docs.
+    with pytest.raises(PathNotAllowedError, match="outside root"):
+        guard.resolve("documents:/escape_link")
+
+
 def test_resolved_path_rel_to_root_valueerror() -> None:
     from dokumen_pintar.pathguard import ResolvedPath
     from dokumen_pintar.config import RootConfig

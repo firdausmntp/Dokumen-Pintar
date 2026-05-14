@@ -77,7 +77,7 @@ dari AI agent manapun yang mendukung <a href="https://modelcontextprotocol.io/">
 | **Plain text / Markdown** | ✅ | ✅ | — | ✅ |
 | **JSON** | ✅ | ✅ | JSONPath `$.key` | ✅ |
 | **YAML** | ✅ | ✅ | JSONPath `$.key` | ✅ |
-| **CSV / TSV** | ✅ | ✅ | `row:N` · `col:N` · `cell:R,C` | ✅ |
+| **CSV / TSV** | ✅ | ✅ | `row:N` · `col:NAME` · `cell:row:N,col:NAME` | ✅ |
 | **XML / SVG** | ✅ | ✅ | XPath `//node` | ✅ |
 | **DOCX** | ✅ | ✅ | `paragraph:N` · `table:N` | ✅ |
 | **XLSX** | ✅ | ✅ | `cell:Sheet!A1` · `range:` · `sheet:` | ✅ |
@@ -138,6 +138,37 @@ Atau buat manual:
 ```bash
 dokumen-pintar --config dokumen-pintar.config.json
 ```
+
+#### Root ad-hoc tanpa config file
+
+Override atau ganti root config dari command line — cocok untuk sesi
+sekali pakai atau scripting:
+
+```bash
+# Single writable root, tidak butuh config file
+dokumen-pintar --root docs:/path/ke/folder
+
+# Multi-root, campur read-only & writable, transport stdio
+dokumen-pintar \
+  --root project:/repo:rw \
+  --root refs:/library:ro \
+  --transport stdio
+
+# Paksa semua root jadi read-only (override config + --root)
+dokumen-pintar --config myconfig.json --read-only
+
+# Path-only (nama root diambil dari basename)
+dokumen-pintar --root /home/saya/Documents
+```
+
+#### Health check
+
+```bash
+dokumen-pintar-doctor --config dokumen-pintar.config.json
+```
+
+Memverifikasi validitas config, keberadaan root, writability `.mcpdocs`,
+handler yang terdaftar, dan dependency optional semantic-search.
 
 ### 4. Hubungkan ke AI Client
 

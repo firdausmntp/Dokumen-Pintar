@@ -10,9 +10,14 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
-from ..errors import ValidationError
+from ..errors import UnsupportedFormatError, ValidationError
 from ..utils.locks import file_lock
-from ._common import resolve_for_read, resolve_for_write, summarize_resolved
+from ._common import (
+    BINARY_CONTAINER_FORMATS,
+    resolve_for_read,
+    resolve_for_write,
+    summarize_resolved,
+)
 
 
 def register(mcp: FastMCP, ctx: AppContext) -> None:
@@ -36,6 +41,18 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     def file_create(path: str, content: str = "", overwrite: bool = False) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
         target = resolved.absolute
+        # Refuse to create binary container formats via raw text — the
+        # resulting file would be a non-conforming "fake" docx/xlsx/etc.
+        # An empty placeholder is also blocked because consumers will try
+        # to open it and get parse errors.
+        handler = ctx.registry.for_path(target)
+        if handler is not None and handler.name in BINARY_CONTAINER_FORMATS:
+            raise UnsupportedFormatError(
+                f"file_create: refusing to write {handler.name} via raw text "
+                "(would produce a non-conforming file). Use content_write to "
+                "go through the format-aware writer (docx only), or struct_set "
+                "for xlsx/pptx; pdf is read-only."
+            )
         with file_lock(target):
             if target.exists():
                 if not overwrite:
@@ -57,10 +74,18 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     def file_delete(path: str, recursive: bool = False) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
         target = resolved.absolute
+        # Refuse to delete the workspace root itself — that would wipe the
+        # entire root the user mounted (and almost never reflects intent).
+        if target == resolved.root_absolute:
+            raise ValidationError(
+                f"Refusing to delete workspace root '{resolved.root.name}' "
+                f"({target}). Delete its contents individually instead."
+            )
         with file_lock(target):
             if not target.exists():
                 raise ValidationError(f"Path does not exist: {target}")
             snap = None
+            snapshot_count = 0
             if target.is_file():
                 snap = _snapshot(resolved, "delete")
                 target.unlink()
@@ -69,9 +94,39 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
                     raise ValidationError(
                         f"Path is a directory; pass recursive=true to delete: {target}"
                     )
+                # B15: snapshot every file inside the directory BEFORE the
+                # recursive remove, so users can recover individual entries
+                # via `version_list` + `version_restore`. Bounded by the
+                # global max_versions_per_file so this stays predictable.
+                for child in target.rglob("*"):
+                    if child.is_file():
+                        try:
+                            rel_to_root = child.relative_to(resolved.root_absolute).as_posix()
+                        except ValueError:
+                            continue
+                        try:
+                            ctx.versions.snapshot(
+                                root_name=resolved.root.name,
+                                rel_path=rel_to_root,
+                                source=child,
+                                action="recursive_delete",
+                            )
+                            snapshot_count += 1
+                        except Exception:  # noqa: BLE001
+                            # Never block the delete on a single snapshot failure.
+                            pass
                 shutil.rmtree(target)
-        ctx.audit.log("file_delete", path=str(target), root=resolved.root.name)
-        return {**summarize_resolved(resolved), "deleted": True, "snapshot": snap}
+        ctx.audit.log(
+            "file_delete",
+            path=str(target),
+            root=resolved.root.name,
+            recursive=recursive,
+            snapshots=snapshot_count,
+        )
+        result: dict[str, Any] = {**summarize_resolved(resolved), "deleted": True, "snapshot": snap}
+        if snapshot_count:
+            result["snapshots_taken"] = snapshot_count
+        return result
 
     @mcp.tool(
         name="file_rename",
@@ -80,6 +135,10 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     def file_rename(src: str, dst: str) -> dict[str, Any]:
         s = resolve_for_write(ctx, src)
         d = resolve_for_write(ctx, dst)
+        if s.absolute == s.root_absolute:
+            raise ValidationError(
+                f"Refusing to rename workspace root '{s.root.name}' ({s.absolute})."
+            )
         if not s.absolute.exists():
             raise ValidationError(f"Source does not exist: {s.absolute}")
         if d.absolute.exists():
@@ -99,6 +158,10 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     def file_move(src: str, dst: str, overwrite: bool = False) -> dict[str, Any]:
         s = resolve_for_write(ctx, src)
         d = resolve_for_write(ctx, dst)
+        if s.absolute == s.root_absolute:
+            raise ValidationError(
+                f"Refusing to move workspace root '{s.root.name}' ({s.absolute})."
+            )
         if not s.absolute.exists():
             raise ValidationError(f"Source does not exist: {s.absolute}")
         if d.absolute.exists() and not overwrite:
@@ -117,6 +180,17 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     def file_copy(src: str, dst: str, overwrite: bool = False) -> dict[str, Any]:
         s = resolve_for_read(ctx, src)
         d = resolve_for_write(ctx, dst)
+        # Refuse copying the workspace root itself or overwriting one — with
+        # `overwrite=True` the directory branch below would `rmtree(dst)` and
+        # nuke the entire mounted root.
+        if s.absolute == s.root_absolute:
+            raise ValidationError(
+                f"Refusing to copy workspace root '{s.root.name}' ({s.absolute})."
+            )
+        if d.absolute == d.root_absolute:
+            raise ValidationError(
+                f"Refusing to copy onto workspace root '{d.root.name}' ({d.absolute})."
+            )
         if not s.absolute.exists():
             raise ValidationError(f"Source does not exist: {s.absolute}")
         if d.absolute.exists() and not overwrite:

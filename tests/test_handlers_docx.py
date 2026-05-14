@@ -391,6 +391,24 @@ def test_write_text_creates_docx(handler: DocxHandler, tmp_path: Path) -> None:
     assert "World" in text
 
 
+def test_write_text_reraises_handler_error_unwrapped(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    """A HandlerError raised inside the try-block must propagate as-is, not
+    get wrapped a second time as 'failed to write docx'."""
+    from unittest.mock import patch
+
+    target = tmp_path / "reraise.docx"
+    sentinel = HandlerError("explicit failure from inside Document()")
+    with patch(
+        "dokumen_pintar.handlers.docx_handler.Document", side_effect=sentinel
+    ):
+        with pytest.raises(HandlerError, match="explicit failure from inside") as ei:
+            handler.write_text(target, "x")
+        # Must be the same exception, not a wrapped one with "failed to write".
+        assert ei.value is sentinel
+
+
 def test_structured_delete_table(handler: DocxHandler, tmp_path: Path) -> None:
     target = tmp_path / "dt.docx"
     doc = Document()

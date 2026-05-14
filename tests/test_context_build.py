@@ -86,3 +86,31 @@ def test_context_writable_root_no_global_storage(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     ctx = build_context(cfg)
     assert isinstance(ctx.versions, VersionStore)
+
+
+def test_context_swallows_startup_purge_failure(
+    make_config: Callable[..., AppConfig],
+    monkeypatch,
+) -> None:
+    """A corrupt snapshot index must not block server boot — the startup
+    retention sweep is best-effort and silently ignores failures."""
+    from dokumen_pintar import context as context_module
+
+    calls = {"n": 0}
+    real_init = context_module.VersionStore.__init__
+
+    def _init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        real_init(self, *args, **kwargs)
+        # Replace purge with one that raises on first call.
+        def _boom(*a, **kw):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            raise RuntimeError("snapshot index corrupt")
+        self.purge = _boom  # type: ignore[method-assign]
+
+    monkeypatch.setattr(context_module.VersionStore, "__init__", _init)
+
+    cfg = make_config()
+    # Must not raise — the failure is swallowed.
+    ctx = build_context(cfg)
+    assert isinstance(ctx, AppContext)
+    assert calls["n"] == 1

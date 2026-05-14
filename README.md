@@ -77,7 +77,7 @@ from any AI agent that supports the <a href="https://modelcontextprotocol.io/">M
 | **Plain text / Markdown** | ✅ | ✅ | — | ✅ |
 | **JSON** | ✅ | ✅ | JSONPath `$.key` | ✅ |
 | **YAML** | ✅ | ✅ | JSONPath `$.key` | ✅ |
-| **CSV / TSV** | ✅ | ✅ | `row:N` · `col:N` · `cell:R,C` | ✅ |
+| **CSV / TSV** | ✅ | ✅ | `row:N` · `col:NAME` · `cell:row:N,col:NAME` | ✅ |
 | **XML / SVG** | ✅ | ✅ | XPath `//node` | ✅ |
 | **DOCX** | ✅ | ✅ | `paragraph:N` · `table:N` | ✅ |
 | **XLSX** | ✅ | ✅ | `cell:Sheet!A1` · `range:` · `sheet:` | ✅ |
@@ -138,6 +138,37 @@ Or create one manually:
 ```bash
 dokumen-pintar --config dokumen-pintar.config.json
 ```
+
+#### Ad-hoc roots without a config file
+
+Override or replace config roots from the command line — handy for one-off
+sessions or scripting:
+
+```bash
+# Single writable root, no config file required
+dokumen-pintar --root docs:/path/to/folder
+
+# Multiple roots, mix read-only and writable, choose stdio transport
+dokumen-pintar \
+  --root project:/repo:rw \
+  --root refs:/library:ro \
+  --transport stdio
+
+# Force every root to read-only (overrides config + --root)
+dokumen-pintar --config myconfig.json --read-only
+
+# Path-only shorthand (root name derived from basename)
+dokumen-pintar --root /home/me/Documents
+```
+
+#### Health check
+
+```bash
+dokumen-pintar-doctor --config dokumen-pintar.config.json
+```
+
+Verifies config validity, root existence, `.mcpdocs` snapshot writability,
+registered handlers, and optional semantic-search dependencies.
 
 ### 4. Connect to an AI Client
 

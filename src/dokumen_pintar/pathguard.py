@@ -95,6 +95,15 @@ class PathGuard:
             if match is not None:
                 root_cfg, root_abs = match
                 candidate = (root_abs / rel).resolve() if rel else root_abs
+                # Enforce containment — a workspace URI must NEVER resolve
+                # outside its root, even via ``..`` traversal or a symlink
+                # inside the root that points elsewhere. Without this check
+                # ``docs:/../../etc/passwd`` would escape the sandbox.
+                if candidate != root_abs and root_abs not in candidate.parents:
+                    raise PathNotAllowedError(
+                        f"Workspace URI '{user_path}' resolves to '{candidate}' "
+                        f"which is outside root '{root_cfg.name}' ({root_abs})"
+                    )
                 return self._finalize(user_path, candidate, root_cfg, root_abs, must_exist)
 
         # 2) Absolute / expanded path

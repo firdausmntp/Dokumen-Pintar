@@ -34,7 +34,7 @@ from any AI agent that supports the [Model Context Protocol](https://modelcontex
 | Plain text / Markdown | Y | Y | — | Y |
 | JSON | Y | Y | JSONPath `$.key` | Y |
 | YAML | Y | Y | JSONPath `$.key` | Y |
-| CSV / TSV | Y | Y | `row:N` `col:N` `cell:R,C` | Y |
+| CSV / TSV | Y | Y | `row:N` `col:NAME` `cell:row:N,col:NAME` | Y |
 | XML / SVG | Y | Y | XPath `//node` | Y |
 | DOCX | Y | Y | `paragraph:N` `table:N` | Y |
 | XLSX | Y | Y | `cell:Sheet!A1` `range:` `sheet:` | Y |

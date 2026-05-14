@@ -37,7 +37,7 @@ def _iter_files(
                 continue
             if any_match(rel, excludes):
                 continue
-            if glob and not fnmatch.fnmatch(p.name, glob):
+            if glob and not (fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(p.name, glob)):
                 continue
             yield root_cfg.name, p, root_abs
 

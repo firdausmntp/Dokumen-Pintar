@@ -16,6 +16,7 @@ from dokumen_pintar.errors import (
 )
 from dokumen_pintar.tools._common import (
     handler_for,
+    refuse_binary_text_op,
     resolve_for_read,
     resolve_for_write,
     summarize_resolved,
@@ -85,3 +86,27 @@ def test_summarize_resolved(context: AppContext, tmp_roots: tuple[Path, Path]) -
     assert "root" in summary
     assert "rel" in summary
     assert summary["root"] == "documents"
+
+
+def test_refuse_binary_text_op_returns_when_no_handler(
+    context: AppContext, tmp_roots: tuple[Path, Path]
+) -> None:
+    """An existing file with an extension no handler claims must NOT be refused
+    — the guard only protects known binary container formats."""
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "weird.xyz123"
+    target.write_text("plain text in unknown ext", encoding="utf-8")
+    resolved = context.guard.resolve(str(target))
+    # Must return None / not raise.
+    assert refuse_binary_text_op(context, resolved, "test_op") is None
+
+
+def test_refuse_binary_text_op_returns_for_directory(
+    context: AppContext, tmp_roots: tuple[Path, Path]
+) -> None:
+    """Directories are also short-circuited (not files)."""
+    docs_dir, _ = tmp_roots
+    d = docs_dir / "adir"
+    d.mkdir()
+    resolved = context.guard.resolve(str(d))
+    assert refuse_binary_text_op(context, resolved, "test_op") is None

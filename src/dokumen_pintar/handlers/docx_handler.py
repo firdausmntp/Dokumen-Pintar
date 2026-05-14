@@ -131,12 +131,24 @@ class DocxHandler:
     # ---------- writing ----------
 
     def write_text(self, path: Path, content: str, **_: Any) -> None:
+        # write_text on docx CREATES a fresh document containing only plain
+        # paragraphs — refuse to clobber an existing file, which would silently
+        # destroy any styles, tables, images, headers/footers, comments, or
+        # other rich content. Callers that need to mutate an existing docx
+        # should use the structured API (structured_set with `paragraph:N`).
+        if path.exists():
+            raise HandlerError(
+                f"write_text refuses to overwrite existing docx '{path}' "
+                "(would discard styles, tables, images, and other rich "
+                "content). Delete the file first if you really want to "
+                "replace it, or use structured_set to mutate paragraphs."
+            )
         try:
             doc = Document()
             for line in content.split("\n"):
                 doc.add_paragraph(line)
             doc.save(str(path))
-        except HandlerError:  # pragma: no cover
+        except HandlerError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise HandlerError(f"failed to write docx: {path} ({exc})") from exc

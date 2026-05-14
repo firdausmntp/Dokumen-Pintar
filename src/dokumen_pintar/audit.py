@@ -54,10 +54,14 @@ class AuditLogger:
 
     def close(self) -> None:
         with self._lock:
-            if self._fh is not None and not self._fh.closed:
+            fh = self._fh
+            if fh is not None and not fh.closed:
                 try:
-                    self._fh.flush()
-                    self._fh.close()
+                    fh.flush()
                 except OSError:
                     pass
-                self._fh = None
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+            self._fh = None

@@ -354,6 +354,44 @@ def test_content_write_handler_unsupported_fallback(
     assert (docs_dir / "wfallback.txt").read_text(encoding="utf-8") == "new text"
 
 
+def test_content_write_binary_handler_unsupported_reraises(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """If a binary-container handler with WRITE_TEXT capability raises
+    UnsupportedFormatError at runtime, the error must propagate — we must
+    NOT silently fall back to writing raw bytes (that would corrupt the
+    file with a binary extension)."""
+    from unittest.mock import patch
+    from dokumen_pintar.errors import UnsupportedFormatError
+    from dokumen_pintar.handlers.docx_handler import DocxHandler
+
+    docs_dir, _ = tmp_roots
+    mcp, _ = _setup(make_config())
+    # New docx (does not exist) — refuse_binary_text_op short-circuits, then
+    # handler.write_text is invoked and we force it to raise.
+    with patch.object(DocxHandler, "write_text", side_effect=UnsupportedFormatError("nope")):
+        with pytest.raises(UnsupportedFormatError, match="nope"):
+            _tool(mcp, "content_write")(path="documents:/x.docx", content="x")
+    # No raw-bytes fallback file should have been left behind.
+    assert not (docs_dir / "x.docx").exists()
+
+
+@pytest.mark.parametrize("ext", ["xlsx", "pptx", "pdf"])
+def test_content_write_refuses_new_binary_without_write_text(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path], ext: str
+) -> None:
+    """xlsx/pptx/pdf handlers don't expose WRITE_TEXT — content_write on a
+    fresh file with that extension must refuse rather than fall through to
+    a raw-bytes write."""
+    from dokumen_pintar.errors import UnsupportedFormatError
+
+    docs_dir, _ = tmp_roots
+    mcp, _ = _setup(make_config())
+    with pytest.raises(UnsupportedFormatError, match="write_text"):
+        _tool(mcp, "content_write")(path=f"documents:/fresh.{ext}", content="x")
+    assert not (docs_dir / f"fresh.{ext}").exists()
+
+
 def test_content_patch_removal_mismatch(
     make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
 ) -> None:
@@ -439,3 +477,108 @@ def test_content_patch_bare_line_outside_hunk(
     _tool(mcp, "content_patch")(path="documents:/bare.txt", unified_diff=diff)
     text = (docs_dir / "bare.txt").read_text(encoding="utf-8")
     assert text == "y\n"
+
+
+# ── B7 regression: content_* tools must refuse to corrupt binary formats ──
+
+
+def _make_docx(path: Path, paragraphs: list[str]) -> bytes:
+    from docx import Document
+
+    doc = Document()
+    for p in paragraphs:
+        doc.add_paragraph(p)
+    doc.save(str(path))
+    return path.read_bytes()
+
+
+def _make_xlsx(path: Path) -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "hello"
+    wb.save(str(path))
+    return path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "tool,kwargs",
+    [
+        ("content_write", {"content": "destroyed"}),
+        ("content_append", {"content": "destroyed"}),
+        ("content_insert", {"line_number": 1, "content": "destroyed"}),
+        ("content_replace", {"old": "hello", "new": "destroyed"}),
+        ("content_delete_range", {"start_line": 1, "end_line": 1}),
+        ("content_patch", {"unified_diff": "@@ -1,1 +1,1 @@\n-hello\n+x\n"}),
+    ],
+)
+def test_content_tools_refuse_existing_docx(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path],
+    tool: str, kwargs: dict,
+) -> None:
+    from dokumen_pintar.errors import UnsupportedFormatError
+
+    docs_dir, _ = tmp_roots
+    docx_path = docs_dir / "doc.docx"
+    original = _make_docx(docx_path, ["hello"])
+    mcp, _ = _setup(make_config())
+    with pytest.raises(UnsupportedFormatError):
+        _tool(mcp, tool)(path="documents:/doc.docx", **kwargs)
+    # File must remain byte-identical.
+    assert docx_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "make_file,suffix",
+    [
+        (_make_xlsx, ".xlsx"),
+    ],
+)
+def test_content_write_refuses_existing_xlsx(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path],
+    make_file, suffix: str,
+) -> None:
+    from dokumen_pintar.errors import UnsupportedFormatError
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / f"file{suffix}"
+    original = make_file(target)
+    mcp, _ = _setup(make_config())
+    with pytest.raises(UnsupportedFormatError):
+        _tool(mcp, "content_write")(path=f"documents:/file{suffix}", content="x")
+    # File must remain byte-identical (no corruption).
+    assert target.read_bytes() == original
+
+
+def test_content_write_still_creates_new_docx(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Creating a brand-new docx via content_write must still work."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "new.docx"
+    assert not target.exists()
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "content_write")(
+        path="documents:/new.docx", content="hello\nworld"
+    )
+    assert target.exists()
+    assert "snapshot" in result
+    doc = Document(str(target))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "hello" in text and "world" in text
+
+
+def test_docx_write_text_refuses_overwrite_existing(tmp_path: Path) -> None:
+    """B8: DocxHandler.write_text must not silently destroy an existing docx."""
+    from dokumen_pintar.errors import HandlerError
+    from dokumen_pintar.handlers.docx_handler import DocxHandler
+
+    handler = DocxHandler()
+    target = tmp_path / "exist.docx"
+    original = _make_docx(target, ["original"])
+    with pytest.raises(HandlerError, match="refuses to overwrite"):
+        handler.write_text(target, "replacement")
+    assert target.read_bytes() == original

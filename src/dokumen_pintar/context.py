@@ -62,10 +62,22 @@ def build_context(config: AppConfig) -> AppContext:
     from .handlers import pptx_handler  # noqa: F401
     from .handlers import pdf_handler  # noqa: F401
 
-    return AppContext(
+    ctx = AppContext(
         config=config,
         guard=guard,
         versions=versions,
         audit=audit,
         registry=default_registry,
     )
+
+    # Best-effort retention enforcement at startup. Without this the
+    # `retention_days` config is only enforced by manual `version_purge`
+    # calls, so a long-running server's snapshot store would grow forever.
+    if config.versioning.enabled and config.versioning.retention_days > 0:
+        try:
+            versions.purge()
+        except Exception:  # noqa: BLE001
+            # Never let a startup-time cleanup failure block the server.
+            pass
+
+    return ctx

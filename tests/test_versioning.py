@@ -277,8 +277,8 @@ def test_purge_actually_removes(context: AppContext, tmp_roots: tuple[Path, Path
     f.write_text("old", encoding="utf-8")
     context.versions.snapshot(root_name="documents", rel_path="oldpurge.txt", source=f, action="write")
     # Backdoor: update timestamp to something ancient
-    import sqlite3
-    with context.versions._db_lock, context.versions._connect() as conn:
+    from contextlib import closing
+    with context.versions._db_lock, closing(context.versions._connect()) as conn, conn:
         conn.execute("UPDATE versions SET timestamp='2000-01-01T00-00-00-000000Z'")
     removed = context.versions.purge(older_than_days=1)
     assert removed >= 1
