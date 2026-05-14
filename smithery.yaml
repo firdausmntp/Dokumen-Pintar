@@ -1,0 +1,15 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      config:
+        type: string
+        title: Config Path
+        description: Path to dokumen-pintar.config.json file
+    required: []
+  commandFunction: |
+    (config) => ({
+      command: 'dokumen-pintar',
+      args: config.config ? ['--config', config.config] : []
+    })
