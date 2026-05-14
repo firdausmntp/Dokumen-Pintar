@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Dokumen-Pintar logo">
+  <title>Dokumen-Pintar</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e3a5f"/>
+      <stop offset="1" stop-color="#0f2440"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background -->
+  <rect x="8" y="8" width="240" height="240" rx="48" ry="48" fill="url(#bg)"/>
+
+  <!-- Document stack: back -->
+  <g transform="translate(58,50) rotate(-6 70 88)" opacity="0.4">
+    <rect width="130" height="155" rx="10" fill="#ffffff"/>
+  </g>
+
+  <!-- Document stack: middle -->
+  <g transform="translate(66,56) rotate(-2 70 88)" opacity="0.6">
+    <rect width="130" height="155" rx="10" fill="#ffffff"/>
+  </g>
+
+  <!-- Front document -->
+  <g transform="translate(74,62)">
+    <rect width="130" height="155" rx="10" fill="#f1f5f9"/>
+    <!-- Folded corner -->
+    <path d="M 106 0 L 130 24 L 106 24 Z" fill="#cbd5e1"/>
+    <path d="M 106 0 L 130 24" fill="none" stroke="#94a3b8" stroke-width="1.2"/>
+
+    <!-- Text lines -->
+    <g stroke="#94a3b8" stroke-linecap="round" stroke-width="5">
+      <line x1="16" y1="42" x2="72" y2="42"/>
+      <line x1="16" y1="58" x2="96" y2="58"/>
+      <line x1="16" y1="74" x2="64" y2="74"/>
+      <line x1="16" y1="90" x2="84" y2="90"/>
+    </g>
+
+    <!-- Checkmark accent -->
+    <g transform="translate(72,124)">
+      <circle r="22" fill="#e8920b" opacity="0.15"/>
+      <path d="M -10 0 L -3 7 L 12 -8" fill="none" stroke="#e8920b" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+
+  <!-- "FSU" text -->
+  <text x="128" y="244" text-anchor="middle" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif" font-size="13" font-weight="700" letter-spacing="3" fill="#ffffff" opacity="0.45">FSU</text>
+</svg>

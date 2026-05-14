@@ -1,0 +1,63 @@
+{
+  "$schema": "./docs/config.schema.json",
+  "roots": [
+    {
+      "name": "documents",
+      "path": "C:/Users/me/Documents",
+      "writable": true
+    },
+    {
+      "name": "projects",
+      "path": "C:/Users/me/Projects",
+      "writable": true
+    },
+    {
+      "name": "reference",
+      "path": "D:/Reference",
+      "writable": false
+    }
+  ],
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.mcpdocs/**"
+  ],
+  "max_file_size_mb": 100,
+  "default_encoding": "utf-8",
+  "auto_detect_encoding": true,
+  "versioning": {
+    "enabled": true,
+    "storage_mode": "per_root",
+    "global_storage_path": null,
+    "retention_days": 30,
+    "max_versions_per_file": 50
+  },
+  "audit": {
+    "enabled": true,
+    "log_path": null
+  },
+  "transport": {
+    "stdio": true,
+    "http": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 7878,
+      "auth_token": null
+    }
+  },
+  "semantic_search": {
+    "enabled": false,
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "index_path": null,
+    "auto_index_globs": ["**/*.txt", "**/*.md"],
+    "chunk_size": 512,
+    "chunk_overlap": 64
+  },
+  "safety": {
+    "allow_sensitive": false,
+    "follow_symlinks": false,
+    "validate_roundtrip_writes": true
+  }
+}
