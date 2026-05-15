@@ -61,6 +61,11 @@ def build_context(config: AppConfig) -> AppContext:
     from .handlers import xlsx_handler  # noqa: F401
     from .handlers import pptx_handler  # noqa: F401
     from .handlers import pdf_handler  # noqa: F401
+    # MarkdownHandler & LatexHandler register AFTER text_handler so they win
+    # the .md / .markdown / .tex extension lookups (registry overwrites).
+    from .handlers import markdown_handler  # noqa: F401
+    from .handlers import latex_handler  # noqa: F401
+    from .handlers import image_handler  # noqa: F401
 
     ctx = AppContext(
         config=config,

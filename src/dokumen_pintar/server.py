@@ -110,9 +110,12 @@ def _build_server(cfg: AppConfig) -> tuple[FastMCP, AppContext]:
     )
 
     from .tools import (
+        authoring,
         batch,
+        batch_structured,
         content_crud,
         file_crud,
+        metadata,
         search,
         structured,
         version,
@@ -125,7 +128,10 @@ def _build_server(cfg: AppConfig) -> tuple[FastMCP, AppContext]:
     structured.register(mcp, ctx)
     search.register(mcp, ctx)
     batch.register(mcp, ctx)
+    batch_structured.register(mcp, ctx)
     version.register(mcp, ctx)
+    authoring.register(mcp, ctx)
+    metadata.register(mcp, ctx)
 
     return mcp, ctx
 

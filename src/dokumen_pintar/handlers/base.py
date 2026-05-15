@@ -17,6 +17,7 @@ class HandlerCapability(Flag):
     LIST_ITEMS = auto()
     SEARCH_EXTRACTED = auto()  # can produce plain text for search indexing
     BINARY_ONLY = auto()
+    WRITE_META = auto()  # handler supports writing document/image metadata
 
 
 @runtime_checkable

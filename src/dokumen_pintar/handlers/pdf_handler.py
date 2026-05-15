@@ -101,6 +101,7 @@ class PdfHandler:
         HandlerCapability.READ_TEXT
         | HandlerCapability.STRUCTURED_GET
         | HandlerCapability.STRUCTURED_SET
+        | HandlerCapability.WRITE_META
         | HandlerCapability.STRUCTURED_DELETE
         | HandlerCapability.SEARCH_EXTRACTED
     )
@@ -371,6 +372,92 @@ class PdfHandler:
         raise HandlerError(
             f"unsupported structured_delete expression '{expr}' (expected 'page:<n>' or 'metadata')"
         )
+
+
+    # ----------------------------------------------------- write metadata
+    _WRITABLE_KEYS: tuple[str, ...] = (
+        "title",
+        "author",
+        "subject",
+        "creator",
+        "producer",
+        "keywords",
+        "creation_date",
+        "modification_date",
+    )
+
+    def write_meta(self, path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+        """Merge ``updates`` into the PDF's docinfo + XMP metadata.
+
+        Unknown keys are rejected. ``None`` values delete the corresponding
+        entry from the docinfo dict.
+        """
+        for key in updates:
+            if key not in self._WRITABLE_KEYS:
+                raise HandlerError(
+                    f"unknown PDF metadata key: {key!r} "
+                    f"(allowed: {list(self._WRITABLE_KEYS)})"
+                )
+        key_map = {
+            "title": "/Title",
+            "author": "/Author",
+            "subject": "/Subject",
+            "creator": "/Creator",
+            "producer": "/Producer",
+            "keywords": "/Keywords",
+            "creation_date": "/CreationDate",
+            "modification_date": "/ModDate",
+        }
+        applied: dict[str, Any] = {}
+        try:
+            with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
+                for key, value in updates.items():
+                    pdf_key = pikepdf.Name(key_map[key])
+                    if value is None:
+                        # Delete the entry if present. pikepdf's docinfo
+                        # silently ignores missing keys, but we still wrap
+                        # the call in a guard so a future tightening of
+                        # pikepdf's API cannot break us.
+                        try:
+                            del pdf.docinfo[pdf_key]
+                        except KeyError:  # pragma: no cover — pikepdf is silent
+                            pass
+                    else:
+                        pdf.docinfo[pdf_key] = str(value)
+                    applied[key] = value
+                pdf.save(str(path))
+        except pikepdf.PasswordError as exc:
+            raise HandlerError(
+                "PDF is encrypted and requires a password; metadata update aborted"
+            ) from exc
+        except pikepdf.PdfError as exc:
+            raise HandlerError(f"failed to update PDF metadata: {exc}") from exc
+        except OSError as exc:
+            raise HandlerError(f"cannot write PDF: {exc}") from exc
+        return applied
+
+    def strip_meta(self, path: Path) -> dict[str, Any]:
+        """Remove every key from the PDF's docinfo dict and clear XMP."""
+        cleared: list[str] = []
+        try:
+            with pikepdf.open(str(path), allow_overwriting_input=True) as pdf:
+                for k in list(pdf.docinfo.keys()):
+                    cleared.append(str(k))
+                    del pdf.docinfo[k]
+                # Clear XMP packet too — open_metadata().clear() handles
+                # both halves consistently.
+                with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+                    meta.clear()
+                pdf.save(str(path))
+        except pikepdf.PasswordError as exc:
+            raise HandlerError(
+                "PDF is encrypted and requires a password; metadata strip aborted"
+            ) from exc
+        except pikepdf.PdfError as exc:
+            raise HandlerError(f"failed to strip PDF metadata: {exc}") from exc
+        except OSError as exc:
+            raise HandlerError(f"cannot write PDF: {exc}") from exc
+        return {"stripped": cleared}
 
 
 # Runtime-checkable protocol sanity assertion + registry hookup.

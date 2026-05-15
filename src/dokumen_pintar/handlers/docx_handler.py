@@ -89,6 +89,7 @@ class DocxHandler:
         | HandlerCapability.STRUCTURED_SET
         | HandlerCapability.STRUCTURED_DELETE
         | HandlerCapability.SEARCH_EXTRACTED
+        | HandlerCapability.WRITE_META
     )
 
     def detect(self, path: Path) -> bool:
@@ -277,6 +278,81 @@ class DocxHandler:
             doc.save(str(path))
         except Exception as exc:  # noqa: BLE001
             raise HandlerError(f"failed to save docx: {path} ({exc})") from exc
+
+
+    # ---------- metadata write ----------
+
+    _WRITABLE_CORE_PROPS: tuple[str, ...] = (
+        "author",
+        "category",
+        "comments",
+        "content_status",
+        "created",
+        "identifier",
+        "keywords",
+        "language",
+        "last_modified_by",
+        "last_printed",
+        "modified",
+        "revision",
+        "subject",
+        "title",
+        "version",
+    )
+
+    def write_meta(self, path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+        """Merge ``updates`` into the document's core properties.
+
+        Unknown keys raise :class:`HandlerError`. Returns the dict that was
+        actually applied (matching the requested updates after normalization).
+        """
+        doc = _open(path)
+        cp = doc.core_properties
+        applied: dict[str, Any] = {}
+        for key, value in updates.items():
+            if key not in self._WRITABLE_CORE_PROPS:
+                raise HandlerError(
+                    f"unknown core property: {key!r} "
+                    f"(allowed: {list(self._WRITABLE_CORE_PROPS)})"
+                )
+            try:
+                setattr(cp, key, value)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise HandlerError(
+                    f"failed to set core property {key!r}: {exc}"
+                ) from exc
+            applied[key] = value
+        try:
+            doc.save(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise HandlerError(f"failed to save docx: {exc}") from exc
+        return applied
+
+    def strip_meta(self, path: Path) -> dict[str, Any]:
+        """Clear every writable core property to its empty default."""
+        doc = _open(path)
+        cp = doc.core_properties
+        cleared: list[str] = []
+        for key in self._WRITABLE_CORE_PROPS:
+            try:
+                # Strings reset to "", datetimes/objects reset to None.
+                current = getattr(cp, key, None)
+                if isinstance(current, str):
+                    setattr(cp, key, "")
+                else:
+                    setattr(cp, key, None)
+                cleared.append(key)
+            except (AttributeError, TypeError, ValueError):  # pragma: no cover
+                # Some properties (e.g. "revision") may be read-only in
+                # certain python-docx versions; silently skip those rather
+                # than fail the whole strip. This branch is defensive and
+                # not reachable in the version tested here.
+                continue
+        try:
+            doc.save(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise HandlerError(f"failed to save docx: {exc}") from exc
+        return {"stripped": cleared}
 
 
 # Runtime-checkable protocol sanity assertion.

@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from ..context import AppContext
 from ..errors import DokumenPintarError, ValidationError
 from ..utils.encoding import read_text, write_text
-from ..utils.globbing import any_match, compile_globs
+from ..utils.globbing import any_match, compile_globs, split_root_glob
 from ..utils.locks import file_lock
 from ._common import resolve_for_write
 
@@ -33,11 +33,21 @@ def _looks_binary(path: Path, sample_size: int = 8192) -> bool:
 
 
 def _iter_writable_files(ctx: AppContext, glob_pattern: str) -> list[tuple[str, Path, Path]]:
-    """List (root_name, abs_path, root_abs) for files matching the glob in writable roots."""
+    """List (root_name, abs_path, root_abs) for files matching the glob in writable roots.
+
+    The glob may include a workspace URI prefix (e.g. ``kp:/*.docx``); when
+    present, only files inside that root are scanned and the bare pattern is
+    matched against the relative path / filename.
+    """
+    root_filter, bare_pattern = split_root_glob(glob_pattern)
+    if bare_pattern is None or bare_pattern == "":
+        return []
     excludes = compile_globs(ctx.config.exclude_patterns)
     out: list[tuple[str, Path, Path]] = []
     for root_cfg, root_abs in ctx.guard.roots:
         if not root_cfg.writable or not root_abs.exists():
+            continue
+        if root_filter and root_cfg.name != root_filter:
             continue
         for p in root_abs.rglob("*"):
             if not p.is_file():
@@ -48,7 +58,7 @@ def _iter_writable_files(ctx: AppContext, glob_pattern: str) -> list[tuple[str, 
                 continue
             if any_match(rel, excludes):
                 continue
-            if not (fnmatch.fnmatch(rel, glob_pattern) or fnmatch.fnmatch(p.name, glob_pattern)):
+            if not (fnmatch.fnmatch(rel, bare_pattern) or fnmatch.fnmatch(p.name, bare_pattern)):
                 continue
             out.append((root_cfg.name, p, root_abs))
     return out
@@ -174,6 +184,10 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         result: dict[str, Any] = {"dry_run": dry_run, "count": len(plan), "files": plan}
         if skipped:
             result["skipped"] = skipped
+            summary: dict[str, int] = {}
+            for s in skipped:
+                summary[s["reason"]] = summary.get(s["reason"], 0) + 1
+            result["skipped_summary"] = summary
         return result
 
     @mcp.tool(

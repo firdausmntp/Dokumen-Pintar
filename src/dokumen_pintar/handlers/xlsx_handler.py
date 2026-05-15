@@ -54,6 +54,26 @@ class XlsxHandler:
         | HandlerCapability.STRUCTURED_SET
         | HandlerCapability.STRUCTURED_DELETE
         | HandlerCapability.SEARCH_EXTRACTED
+        | HandlerCapability.WRITE_META
+    )
+
+    # openpyxl workbook.properties names — see DocumentProperties.
+    _WRITABLE_PROPS: tuple[str, ...] = (
+        "creator",
+        "title",
+        "description",
+        "subject",
+        "identifier",
+        "language",
+        "keywords",
+        "category",
+        "lastModifiedBy",
+        "contentStatus",
+        "version",
+        "revision",
+        "modified",
+        "created",
+        "lastPrinted",
     )
 
     def detect(self, path: Path) -> bool:
@@ -261,6 +281,61 @@ class XlsxHandler:
                 wb.save(path)
             except OSError as exc:
                 raise HandlerError(f"cannot save xlsx file: {path} ({exc})") from exc
+        finally:
+            wb.close()
+
+
+    def write_meta(self, path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+        wb = _load(path)
+        try:
+            props = wb.properties
+            applied: dict[str, Any] = {}
+            for key, value in updates.items():
+                if key not in self._WRITABLE_PROPS:
+                    raise HandlerError(
+                        f"unknown property: {key!r} "
+                        f"(allowed: {list(self._WRITABLE_PROPS)})"
+                    )
+                try:
+                    setattr(props, key, value)
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise HandlerError(
+                        f"failed to set property {key!r}: {exc}"
+                    ) from exc
+                applied[key] = value
+            try:
+                wb.save(path)
+            except OSError as exc:
+                raise HandlerError(f"cannot save xlsx file: {exc}") from exc
+            return applied
+        finally:
+            wb.close()
+
+    def strip_meta(self, path: Path) -> dict[str, Any]:
+        """Clear every text-valued property. Datetime fields are left alone
+        because openpyxl cannot serialize ``None`` timestamps."""
+        wb = _load(path)
+        try:
+            props = wb.properties
+            cleared: list[str] = []
+            for key in self._WRITABLE_PROPS:
+                current = getattr(props, key, None)
+                if isinstance(current, str):
+                    try:
+                        setattr(props, key, "")
+                        cleared.append(key)
+                    except (AttributeError, TypeError, ValueError):  # pragma: no cover
+                        # Defensive: openpyxl's DocumentProperties exposes
+                        # all string fields as settable; this branch is
+                        # only here in case a future release tightens that.
+                        continue
+                # Non-string fields (datetimes mostly) are skipped — openpyxl
+                # serializes them through a tree that asserts non-null types.
+            try:
+                wb.save(path)
+            except OSError as exc:
+                raise HandlerError(f"cannot save xlsx file: {exc}") from exc
+            return {"stripped": cleared}
         finally:
             wb.close()
 

@@ -333,6 +333,96 @@ def test_looks_binary_returns_true_on_oserror(tmp_path: Path) -> None:
     assert _looks_binary(tmp_path / "does_not_exist.bin") is True
 
 
+# ── A1 regression: glob URI-prefix normalization ──
+
+
+def test_batch_glob_with_root_prefix_matches(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Glob `documents:/*.txt` must match files under root `documents`."""
+    docs_dir, _ = tmp_roots
+    (docs_dir / "hello.txt").write_text("foo bar", encoding="utf-8")
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_content")(
+        glob="documents:/*.txt", old="foo", new="baz", dry_run=True
+    )
+    assert result["count"] == 1
+    assert result["files"][0]["uri"].startswith("documents:/")
+
+
+def test_batch_glob_with_other_root_prefix_yields_zero(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Glob with a non-matching root prefix must not yield files from
+    other roots."""
+    docs_dir, _ = tmp_roots
+    (docs_dir / "hello.txt").write_text("foo bar", encoding="utf-8")
+    mcp, _ = _setup(make_config())
+    # Root `nope` does not exist; must be silent zero-match.
+    result = _tool(mcp, "batch_replace_content")(
+        glob="nope:/*.txt", old="foo", new="baz", dry_run=True
+    )
+    assert result["count"] == 0
+    assert result["files"] == []
+
+
+def test_batch_replace_skipped_summary_present(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """When files are skipped, the response includes a per-reason summary."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "a.docx"
+    b = docs_dir / "b.docx"
+    for p in (a, b):
+        d = Document()
+        d.add_paragraph("hello")
+        d.save(str(p))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_content")(
+        glob="*.docx", old="hello", new="HI", dry_run=True
+    )
+    assert result["count"] == 0
+    assert result.get("skipped_summary", {}).get("binary_format") == 2
+
+
+def test_batch_rename_with_root_prefix(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    (docs_dir / "old_x.txt").write_text("x", encoding="utf-8")
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_rename")(
+        glob="documents:/old_*.txt", pattern=r"old_", replacement="new_", dry_run=False
+    )
+    assert result["count"] == 1
+    assert (docs_dir / "new_x.txt").exists()
+
+
+def test_batch_delete_with_root_prefix(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    (docs_dir / "kill_me.log").write_text("x", encoding="utf-8")
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_delete")(glob="documents:/*.log", dry_run=False)
+    assert result["count"] == 1
+    assert not (docs_dir / "kill_me.log").exists()
+
+
+def test_batch_empty_glob_returns_zero(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    (docs_dir / "a.txt").write_text("x", encoding="utf-8")
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_content")(
+        glob="", old="x", new="y", dry_run=True
+    )
+    assert result["count"] == 0
+
+
 def test_batch_replace_content_handles_stat_oserror(
     make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path], monkeypatch
 ) -> None:

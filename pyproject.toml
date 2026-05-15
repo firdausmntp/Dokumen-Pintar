@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dokumen-pintar"
-version = "1.0.1"
+version = "1.0.2"
 description = "MCP server universal untuk CRUD dokumen lintas format (text, JSON, YAML, CSV, XML, DOCX, XLSX, PPTX, PDF) dengan versioning, sandboxed multi-root, search, batch, dan semantic search opsional."
 readme = "README.pypi.md"
 requires-python = ">=3.10"
@@ -39,6 +39,11 @@ dependencies = [
     "pdfplumber>=0.11",
     "pikepdf>=9.0",
     "reportlab>=4.2",
+    "markdown-it-py>=3.0",
+    "mdit-py-plugins>=0.4",
+    "pylatexenc>=2.10",
+    "Pillow>=10.0",
+    "piexif>=1.1",
     "rapidfuzz>=3.9",
     "watchfiles>=0.22",
     "starlette>=0.37",
@@ -117,4 +122,4 @@ exclude_lines = [
     "raise NotImplementedError",
     "@overload",
 ]
-fail_under = 80
+fail_under = 100

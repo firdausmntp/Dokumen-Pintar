@@ -143,6 +143,25 @@ class PptxHandler:
         | HandlerCapability.STRUCTURED_SET
         | HandlerCapability.STRUCTURED_DELETE
         | HandlerCapability.SEARCH_EXTRACTED
+        | HandlerCapability.WRITE_META
+    )
+
+    _WRITABLE_CORE_PROPS: tuple[str, ...] = (
+        "author",
+        "category",
+        "comments",
+        "content_status",
+        "created",
+        "identifier",
+        "keywords",
+        "language",
+        "last_modified_by",
+        "last_printed",
+        "modified",
+        "revision",
+        "subject",
+        "title",
+        "version",
     )
 
     # ---- Detection / meta ----------------------------------------------------
@@ -329,6 +348,59 @@ class PptxHandler:
             return
 
         raise HandlerError(f"unsupported structured_delete expression: {expr!r}")
+
+    # ---- metadata write ------------------------------------------------------
+
+    def write_meta(self, path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+        try:
+            prs = Presentation(str(path))
+        except Exception as exc:
+            raise HandlerError(f"failed to open pptx: {exc}") from exc
+        cp = prs.core_properties
+        applied: dict[str, Any] = {}
+        for key, value in updates.items():
+            if key not in self._WRITABLE_CORE_PROPS:
+                raise HandlerError(
+                    f"unknown core property: {key!r} "
+                    f"(allowed: {list(self._WRITABLE_CORE_PROPS)})"
+                )
+            try:
+                setattr(cp, key, value)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise HandlerError(
+                    f"failed to set core property {key!r}: {exc}"
+                ) from exc
+            applied[key] = value
+        try:
+            prs.save(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise HandlerError(f"failed to save pptx: {exc}") from exc
+        return applied
+
+    def strip_meta(self, path: Path) -> dict[str, Any]:
+        try:
+            prs = Presentation(str(path))
+        except Exception as exc:
+            raise HandlerError(f"failed to open pptx: {exc}") from exc
+        cp = prs.core_properties
+        cleared: list[str] = []
+        for key in self._WRITABLE_CORE_PROPS:
+            try:
+                current = getattr(cp, key, None)
+                if isinstance(current, str):
+                    setattr(cp, key, "")
+                else:
+                    setattr(cp, key, None)
+                cleared.append(key)
+            except (AttributeError, TypeError, ValueError):  # pragma: no cover
+                # Defensive: matches the docx strip_meta pattern; not
+                # reachable on the python-pptx version exercised by tests.
+                continue
+        try:
+            prs.save(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise HandlerError(f"failed to save pptx: {exc}") from exc
+        return {"stripped": cleared}
 
 
 # Runtime-checkable protocol sanity assertion.

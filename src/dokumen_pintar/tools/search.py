@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
 from ..errors import DokumenPintarError
-from ..utils.globbing import compile_globs, any_match
+from ..utils.globbing import any_match, compile_globs, split_root_glob
 from ._common import resolve_for_read
 
 
@@ -21,10 +21,20 @@ def _iter_files(
     root_filter: str | None,
     glob: str | None,
 ) -> Iterator[tuple[str, Path, Path]]:
-    """Yield (root_name, abs_path, root_abs) for each non-excluded file."""
+    """Yield (root_name, abs_path, root_abs) for each non-excluded file.
+
+    The glob may be a workspace URI like ``kp:/*.docx``; the URI prefix is
+    stripped and used as a root filter (which combines with ``root_filter``).
+    """
+    glob_root, bare_glob = split_root_glob(glob)
+    if glob_root and root_filter and glob_root != root_filter:
+        # Conflicting filters — caller asked for one root in the URI and a
+        # different one via ``root_filter``. Yield nothing.
+        return
+    effective_root = root_filter or glob_root
     excludes = compile_globs(ctx.config.exclude_patterns)
     for root_cfg, root_abs in ctx.guard.roots:
-        if root_filter and root_cfg.name != root_filter:
+        if effective_root and root_cfg.name != effective_root:
             continue
         if not root_abs.exists():
             continue
@@ -37,7 +47,9 @@ def _iter_files(
                 continue
             if any_match(rel, excludes):
                 continue
-            if glob and not (fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(p.name, glob)):
+            if bare_glob and not (
+                fnmatch.fnmatch(rel, bare_glob) or fnmatch.fnmatch(p.name, bare_glob)
+            ):
                 continue
             yield root_cfg.name, p, root_abs
 
