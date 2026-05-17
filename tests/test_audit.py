@@ -90,6 +90,7 @@ def test_audit_reopen_after_close(make_config: Callable[..., AppConfig], tmp_pat
 
 def test_audit_close_oserror(make_config: Callable[..., AppConfig], tmp_path: Path) -> None:
     from unittest.mock import patch
+
     cfg = make_config()
     logger = AuditLogger(cfg, default_path=tmp_path / "audit.jsonl")
     logger.log("x")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import re
 from pathlib import Path
 from typing import Any
@@ -10,10 +9,10 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
-from ..errors import DokumenPintarError, ValidationError
+from ..errors import ValidationError
 from ..utils.encoding import read_text, write_text
-from ..utils.globbing import any_match, compile_globs, split_root_glob
 from ..utils.locks import file_lock
+from ..utils.walking import iter_files
 from ._common import resolve_for_write
 
 # Formats that are binary containers (ZIP, OLE, PDF) — never safe for raw
@@ -21,9 +20,58 @@ from ._common import resolve_for_write
 # (which goes through the format-aware writer, not raw bytes).
 _BINARY_FORMATS = frozenset({"docx", "xlsx", "pptx", "pdf"})
 
+# Extensions matching _BINARY_FORMATS plus a handful of common archive /
+# image / audio formats. Used as a fast pre-filter so we can skip the
+# 8KB nul-byte probe entirely for files that are obviously binary.
+_BINARY_EXTENSIONS = frozenset(
+    {
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".pdf",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".bmp",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".ico",
+        ".mp3",
+        ".mp4",
+        ".wav",
+        ".avi",
+        ".mov",
+        ".mkv",
+        ".flac",
+        ".ogg",
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".bin",
+        ".o",
+        ".obj",
+        ".class",
+        ".pyc",
+        ".pyd",
+        ".whl",
+    }
+)
+
 
 def _looks_binary(path: Path, sample_size: int = 8192) -> bool:
-    """Heuristic: file looks binary if first chunk contains a NUL byte."""
+    """Return True if the file is binary by extension or first-chunk probe."""
+    if path.suffix.lower() in _BINARY_EXTENSIONS:
+        return True
     try:
         with path.open("rb") as fh:
             chunk = fh.read(sample_size)
@@ -33,35 +81,8 @@ def _looks_binary(path: Path, sample_size: int = 8192) -> bool:
 
 
 def _iter_writable_files(ctx: AppContext, glob_pattern: str) -> list[tuple[str, Path, Path]]:
-    """List (root_name, abs_path, root_abs) for files matching the glob in writable roots.
-
-    The glob may include a workspace URI prefix (e.g. ``kp:/*.docx``); when
-    present, only files inside that root are scanned and the bare pattern is
-    matched against the relative path / filename.
-    """
-    root_filter, bare_pattern = split_root_glob(glob_pattern)
-    if bare_pattern is None or bare_pattern == "":
-        return []
-    excludes = compile_globs(ctx.config.exclude_patterns)
-    out: list[tuple[str, Path, Path]] = []
-    for root_cfg, root_abs in ctx.guard.roots:
-        if not root_cfg.writable or not root_abs.exists():
-            continue
-        if root_filter and root_cfg.name != root_filter:
-            continue
-        for p in root_abs.rglob("*"):
-            if not p.is_file():
-                continue
-            try:
-                rel = p.relative_to(root_abs).as_posix()
-            except ValueError:
-                continue
-            if any_match(rel, excludes):
-                continue
-            if not (fnmatch.fnmatch(rel, bare_pattern) or fnmatch.fnmatch(p.name, bare_pattern)):
-                continue
-            out.append((root_cfg.name, p, root_abs))
-    return out
+    """List ``(root_name, abs, root_abs)`` for matching files in writable roots."""
+    return list(iter_files(ctx, glob=glob_pattern, writable_only=True))
 
 
 def register(mcp: FastMCP, ctx: AppContext) -> None:

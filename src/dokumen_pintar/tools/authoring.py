@@ -9,12 +9,13 @@ from mcp.server.fastmcp import FastMCP
 
 from ..authoring.markdown_to_spec import markdown_to_spec
 from ..authoring.render_docx import render_docx
+from ..authoring.render_markdown import render_docx_to_markdown
 from ..authoring.render_pdf import render_pdf
 from ..authoring.spec import DocumentSpec, SpecError, validate_spec
 from ..context import AppContext
 from ..errors import HandlerError, UnsupportedFormatError, ValidationError
 from ..utils.locks import file_lock
-from ._common import resolve_for_write, summarize_resolved
+from ._common import resolve_for_read, resolve_for_write, summarize_resolved
 
 
 _DOCX_EXT = ".docx"
@@ -24,8 +25,7 @@ _PDF_EXT = ".pdf"
 def _check_overwrite(target: Path, overwrite: bool) -> None:
     if target.exists() and not overwrite:
         raise ValidationError(
-            f"refusing to overwrite existing file: {target} "
-            "(pass overwrite=True to replace)"
+            f"refusing to overwrite existing file: {target} (pass overwrite=True to replace)"
         )
 
 
@@ -39,6 +39,7 @@ def _check_extension(target: Path, expected: str, op: str) -> None:
 def _path_resolver_for(ctx: AppContext):  # type: ignore[no-untyped-def]
     """Return a resolver that turns workspace URIs (or relative paths) into
     absolute :class:`Path` objects, going through PathGuard for safety."""
+
     def _resolve(user_path: str) -> Path:
         try:
             r = ctx.guard.resolve(user_path, must_exist=True)
@@ -102,13 +103,17 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             "Render a JSON document spec to a `.docx` file. Block types: "
             "heading, paragraph, list, table, image, page_break, code, math, "
             "hr, blockquote. Refuses to overwrite unless `overwrite=True`. "
-            "Snapshots pre+post."
+            "Snapshots pre+post. When `template` is provided, the rendered "
+            "blocks are appended to a copy of that template - use this to "
+            "inherit university/corporate styles, headers, footers, page "
+            "setup, and cover pages."
         ),
     )
     def compose_docx(
         path: str,
         spec: dict[str, Any] | str,
         overwrite: bool = False,
+        template: str | None = None,
     ) -> dict[str, Any]:
         resolved = resolve_for_write(ctx, path)
         target = resolved.absolute
@@ -124,14 +129,32 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         with file_lock(target):
             _snapshot_pre(ctx, target, root_name, rel, "compose_docx_pre")
             try:
-                render_docx(doc_spec, target, path_resolver=_path_resolver_for(ctx))
+                if template is not None:
+                    template_resolved = resolve_for_read(ctx, template)
+                    _check_extension(template_resolved.absolute, _DOCX_EXT, "compose_docx")
+                    if not template_resolved.absolute.exists():
+                        raise ValidationError(f"template not found: {template_resolved.absolute}")
+                    render_docx(
+                        doc_spec,
+                        target,
+                        path_resolver=_path_resolver_for(ctx),
+                        template=template_resolved.absolute,
+                    )
+                else:
+                    render_docx(doc_spec, target, path_resolver=_path_resolver_for(ctx))
             except HandlerError:
                 raise
             snap = _snapshot_post(ctx, target, root_name, rel, "compose_docx_post")
-        ctx.audit.log("compose_docx", path=str(target), blocks=len(doc_spec.blocks))
+        ctx.audit.log(
+            "compose_docx",
+            path=str(target),
+            blocks=len(doc_spec.blocks),
+            template=template,
+        )
         return {
             **summarize_resolved(resolved),
             "blocks": len(doc_spec.blocks),
+            "template": template,
             "snapshot": snap,
         }
 
@@ -226,5 +249,64 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             **summarize_resolved(resolved),
             "format": fmt,
             "blocks": len(doc_spec.blocks),
+            "snapshot": snap,
+        }
+
+    @mcp.tool(
+        name="compose_to_markdown",
+        description=(
+            "Convert a DOCX file to Markdown via mammoth + html2text. Tables, "
+            "code blocks, lists, headings, and links are preserved. When "
+            "`extract_images=True` (default), embedded images are written to "
+            "`<dst_dir>/images/` and referenced with relative paths in the "
+            "markdown; otherwise mammoth inlines them as base64 data URIs. "
+            "Refuses to overwrite unless `overwrite=True`. Snapshots pre+post."
+        ),
+    )
+    def compose_to_markdown(
+        src: str,
+        dst: str,
+        overwrite: bool = False,
+        extract_images: bool = True,
+        style_map: str = "",
+        body_width: int = 0,
+    ) -> dict[str, Any]:
+        resolved_src = resolve_for_read(ctx, src)
+        resolved_dst = resolve_for_write(ctx, dst)
+        if resolved_src.absolute.suffix.lower() != _DOCX_EXT:
+            raise UnsupportedFormatError(
+                f"compose_to_markdown: source must be a .docx file, got "
+                f"{resolved_src.absolute.suffix!r}"
+            )
+        if resolved_dst.absolute.suffix.lower() != ".md":
+            raise UnsupportedFormatError(
+                f"compose_to_markdown: destination must end in .md, got "
+                f"{resolved_dst.absolute.suffix!r}"
+            )
+        _check_overwrite(resolved_dst.absolute, overwrite)
+
+        rel = resolved_dst.rel_to_root.as_posix()
+        root_name = resolved_dst.root.name
+        with file_lock(resolved_dst.absolute):
+            _snapshot_pre(ctx, resolved_dst.absolute, root_name, rel, "compose_md_pre")
+            result = render_docx_to_markdown(
+                resolved_src.absolute,
+                resolved_dst.absolute,
+                extract_images=extract_images,
+                style_map=style_map,
+                body_width=body_width,
+            )
+            snap = _snapshot_post(ctx, resolved_dst.absolute, root_name, rel, "compose_md_post")
+        ctx.audit.log(
+            "compose_to_markdown",
+            src=str(resolved_src.absolute),
+            dst=str(resolved_dst.absolute),
+            extract_images=extract_images,
+        )
+        return {
+            "src": summarize_resolved(resolved_src),
+            "dst": summarize_resolved(resolved_dst),
+            "size": result["size"],
+            "warnings": result["warnings"],
             "snapshot": snap,
         }

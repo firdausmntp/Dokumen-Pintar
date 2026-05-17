@@ -45,9 +45,7 @@ def _add_runs(paragraph: Any, runs: list[dict[str, Any]]) -> None:
                 run.font.color.rgb = color
 
 
-def _resolve_image_path(
-    path_str: str, path_resolver: Callable[[str], Path] | None
-) -> Path:
+def _resolve_image_path(path_str: str, path_resolver: Callable[[str], Path] | None) -> Path:
     if path_resolver is not None:
         return path_resolver(path_str)
     return Path(path_str)
@@ -165,13 +163,28 @@ def render_docx(
     out_path: Path,
     *,
     path_resolver: Callable[[str], Path] | None = None,
+    template: Path | None = None,
 ) -> None:
-    """Render `spec` to `out_path`. Caller is responsible for snapshots/locks.
+    """Render ``spec`` to ``out_path``.
 
-    `path_resolver` lets the caller resolve image URIs (e.g. ``kp:/img.png``)
-    through PathGuard before they're fed to python-docx.
+    Caller is responsible for snapshots/locks.
+
+    ``path_resolver`` lets the caller resolve image URIs (e.g.
+    ``kp:/img.png``) through PathGuard before they are fed to python-docx.
+
+    ``template`` (optional) is an existing DOCX whose styles, page setup,
+    headers, and footers should be inherited. The template's body is
+    preserved as-is; the rendered blocks are appended after it. Useful
+    for university or corporate templates with cover pages and standard
+    section properties.
     """
-    doc = Document()
+    if template is not None:
+        try:
+            doc = Document(str(template))
+        except Exception as exc:  # noqa: BLE001 - python-docx surfaces several types
+            raise HandlerError(f"failed to load template: {template} ({exc})") from exc
+    else:
+        doc = Document()
     _apply_meta(doc, spec.meta)
     for block in spec.blocks:
         _render_block(doc, block, path_resolver=path_resolver)

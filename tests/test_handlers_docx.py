@@ -574,3 +574,192 @@ def test_extract_for_search_empty_table_cell(handler: DocxHandler, tmp_path: Pat
     result = handler.extract_for_search(target)
     assert "A" in result
     assert "D" in result
+
+
+
+# ── v1.1.0 Quick Win 2.2: struct_get table sub-expressions ──
+
+
+def _make_table_docx(target: Path) -> None:
+    """Build a 3x3 docx table for sub-expression tests."""
+    doc = Document()
+    t = doc.add_table(rows=3, cols=3)
+    cells = [
+        ["Endpoint", "Method", "Description"],
+        ["/api/sap", "POST", "Trigger sync"],
+        ["/api/log", "GET", "Get logs"],
+    ]
+    for r, row in enumerate(cells):
+        for c, text in enumerate(row):
+            t.cell(r, c).text = text
+    doc.save(str(target))
+
+
+def test_structured_get_table_cell_a1(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "tbl_a1.docx"
+    _make_table_docx(target)
+    assert handler.structured_get(target, "table:0!A1") == "Endpoint"
+    assert handler.structured_get(target, "table:0!B2") == "POST"
+    assert handler.structured_get(target, "table:0!C3") == "Get logs"
+
+
+def test_structured_get_table_row(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "tbl_row.docx"
+    _make_table_docx(target)
+    row = handler.structured_get(target, "table:0!row:1")
+    assert row == ["/api/sap", "POST", "Trigger sync"]
+
+
+def test_structured_get_table_col(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "tbl_col.docx"
+    _make_table_docx(target)
+    col = handler.structured_get(target, "table:0!col:0")
+    assert col == ["Endpoint", "/api/sap", "/api/log"]
+
+
+def test_structured_get_table_subexpr_invalid(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "tbl_inv.docx"
+    _make_table_docx(target)
+    # Empty sub-expr after !
+    with pytest.raises(HandlerError, match="empty table sub-expression"):
+        handler.structured_get(target, "table:0!")
+    # Nonsense sub-expr
+    with pytest.raises(HandlerError, match="unrecognised table sub-expression"):
+        handler.structured_get(target, "table:0!nonsense")
+
+
+def test_structured_get_table_subexpr_row_out_of_range(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    target = tmp_path / "tbl_oor.docx"
+    _make_table_docx(target)
+    with pytest.raises(HandlerError, match="row index"):
+        handler.structured_get(target, "table:0!row:99")
+    with pytest.raises(HandlerError, match="col index"):
+        handler.structured_get(target, "table:0!col:99")
+
+
+def test_structured_get_table_a1_out_of_range(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "tbl_a1oor.docx"
+    _make_table_docx(target)
+    # Z column doesn't exist in 3-col table
+    with pytest.raises(HandlerError, match="cell column"):
+        handler.structured_get(target, "table:0!Z1")
+    # row 99 doesn't exist
+    with pytest.raises(HandlerError, match="cell row"):
+        handler.structured_get(target, "table:0!A99")
+
+
+def test_structured_get_table_a1_double_letter_columns(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    """Verify A1 notation parses double-letter columns (AA = col 26, AB = 27, ...)."""
+    from dokumen_pintar.handlers.docx_handler import _parse_table_subexpr
+
+    # 30-column table semantics, just exercise the parser directly.
+    kind, r, c = _parse_table_subexpr("AA1", ncols=30, nrows=2)
+    assert kind == "cell"
+    assert r == 0
+    assert c == 26
+    kind, r, c = _parse_table_subexpr("AB2", ncols=30, nrows=5)
+    assert kind == "cell"
+    assert r == 1
+    assert c == 27
+
+
+
+# ── v1.1.0 B.5: paragraph_runs structured access ──
+
+
+def test_paragraph_runs_get(handler: DocxHandler, tmp_path: Path) -> None:
+    """`paragraph_runs:N` returns each run's text + bold/italic/underline flags."""
+    target = tmp_path / "runs.docx"
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("Plain ")
+    bold = p.add_run("bold ")
+    bold.bold = True
+    italic = p.add_run("italic")
+    italic.italic = True
+    doc.save(str(target))
+    result = handler.structured_get(target, "paragraph_runs:0")
+    assert result["index"] == 0
+    assert result["text"] == "Plain bold italic"
+    runs = result["runs"]
+    assert runs[0]["text"] == "Plain "
+    assert runs[0]["bold"] is False
+    assert runs[1]["bold"] is True
+    assert runs[2]["italic"] is True
+
+
+def test_paragraph_runs_set_replaces_runs(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "runs_set.docx"
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("old plain")
+    doc.save(str(target))
+    handler.structured_set(
+        target,
+        "paragraph_runs:0",
+        [
+            {"text": "Hello "},
+            {"text": "world", "bold": True, "italic": True, "underline": True},
+        ],
+    )
+    out = Document(str(target))
+    runs = list(out.paragraphs[0].runs)
+    assert [r.text for r in runs] == ["Hello ", "world"]
+    assert runs[1].bold is True
+    assert runs[1].italic is True
+    assert runs[1].underline is True
+
+
+def test_paragraph_runs_set_value_must_be_list(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    target = tmp_path / "bad_value.docx"
+    doc = Document()
+    doc.add_paragraph("x")
+    doc.save(str(target))
+    with pytest.raises(HandlerError, match="must be a list"):
+        handler.structured_set(target, "paragraph_runs:0", {"text": "wrong"})
+
+
+def test_paragraph_runs_set_run_spec_must_be_dict(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    target = tmp_path / "bad_run.docx"
+    doc = Document()
+    doc.add_paragraph("x")
+    doc.save(str(target))
+    with pytest.raises(HandlerError, match="must be a dict"):
+        handler.structured_set(target, "paragraph_runs:0", ["not a dict"])
+
+
+def test_paragraph_runs_set_text_must_be_str(
+    handler: DocxHandler, tmp_path: Path
+) -> None:
+    target = tmp_path / "bad_text.docx"
+    doc = Document()
+    doc.add_paragraph("x")
+    doc.save(str(target))
+    with pytest.raises(HandlerError, match="must be a string"):
+        handler.structured_set(target, "paragraph_runs:0", [{"text": 123}])
+
+
+def test_paragraph_runs_get_out_of_range(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "oor.docx"
+    doc = Document()
+    doc.add_paragraph("only one")
+    doc.save(str(target))
+    with pytest.raises(HandlerError, match="out of range"):
+        handler.structured_get(target, "paragraph_runs:99")
+
+
+def test_paragraph_runs_set_out_of_range(handler: DocxHandler, tmp_path: Path) -> None:
+    target = tmp_path / "oor_set.docx"
+    doc = Document()
+    doc.add_paragraph("only one")
+    doc.save(str(target))
+    with pytest.raises(HandlerError, match="out of range"):
+        handler.structured_set(target, "paragraph_runs:99", [{"text": "x"}])

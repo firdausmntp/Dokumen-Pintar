@@ -134,3 +134,167 @@ def _glob_match(name: str, pattern: str) -> bool:
     import fnmatch
 
     return fnmatch.fnmatch(name, pattern)
+
+
+def _dir_size(path: Path) -> int:
+    """Sum of all file sizes under ``path`` (best-effort, OSError -> 0)."""
+    total = 0
+    try:
+        for child in path.rglob("*"):
+            try:
+                if child.is_file():  # pragma: no branch
+                    total += child.stat().st_size
+            except OSError:  # pragma: no cover - hard to hit between rglob and stat
+                continue
+    except OSError:
+        return 0
+    return total
+
+
+def register_diagnose(mcp: FastMCP, ctx: AppContext) -> None:
+    """Register the workspace_diagnose health-check tool."""
+
+    @mcp.tool(
+        name="workspace_diagnose",
+        description=(
+            "Health check across config, snapshot store, audit log, extract "
+            "cache, semantic index, and per-root disk usage. Read-only - never "
+            "mutates anything. Returns a diagnostics report with warnings for "
+            "common operational issues (missing roots, oversized stores, "
+            "stale caches). Use this when something feels off."
+        ),
+    )
+    def workspace_diagnose() -> dict[str, Any]:
+        cfg = ctx.config
+        warnings: list[str] = []
+
+        # Config + roots ----------------------------------------------------
+        roots_info: list[dict[str, Any]] = []
+        for root_cfg, abs_path in ctx.guard.roots:
+            exists = abs_path.exists()
+            entry: dict[str, Any] = {
+                "name": root_cfg.name,
+                "path": str(abs_path),
+                "writable": root_cfg.writable,
+                "exists": exists,
+            }
+            if exists and abs_path.is_dir():
+                entry["disk_usage_bytes"] = _dir_size(abs_path)
+            else:
+                entry["disk_usage_bytes"] = None
+            if not exists:
+                warnings.append(f"root '{root_cfg.name}' path does not exist: {abs_path}")
+            roots_info.append(entry)
+
+        # Snapshot store ----------------------------------------------------
+        snapshot_info: dict[str, Any] = {
+            "enabled": cfg.versioning.enabled,
+            "storage_mode": cfg.versioning.storage_mode,
+            "retention_days": cfg.versioning.retention_days,
+            "max_versions_per_file": cfg.versioning.max_versions_per_file,
+        }
+        try:
+            db_path = Path(ctx.versions._db_path)  # type: ignore[attr-defined]
+            snapshot_info["index_db"] = str(db_path)
+            snapshot_info["index_db_size_bytes"] = db_path.stat().st_size if db_path.exists() else 0
+        except (AttributeError, OSError):  # pragma: no cover - defensive
+            snapshot_info["index_db"] = None
+
+        try:
+            snapshot_info["snapshot_count"] = ctx.versions.count_all()  # type: ignore[attr-defined]
+        except AttributeError:
+            # Older VersionStore without the helper - count via SQL fallback.
+            snapshot_info["snapshot_count"] = _count_snapshots_via_sql(ctx)
+
+        # Audit log ---------------------------------------------------------
+        audit_info: dict[str, Any] = {
+            "enabled": cfg.audit.enabled,
+            "path": str(ctx.audit.path),
+        }
+        try:
+            audit_path = Path(ctx.audit.path)
+            if audit_path.exists():
+                audit_info["size_bytes"] = audit_path.stat().st_size
+                # Cheap line count (audit is JSONL).
+                with audit_path.open("rb") as fh:
+                    audit_info["entries"] = sum(1 for _ in fh)
+            else:
+                audit_info["size_bytes"] = 0
+                audit_info["entries"] = 0
+        except OSError:
+            audit_info["size_bytes"] = None
+            audit_info["entries"] = None
+
+        # Extract cache -----------------------------------------------------
+        cache_info: dict[str, Any] = {
+            "enabled": ctx.extract_cache.enabled,
+            "path": str(ctx.extract_cache.db_path),
+        }
+        try:
+            cache_path = Path(ctx.extract_cache.db_path)
+            cache_info["size_bytes"] = cache_path.stat().st_size if cache_path.exists() else 0
+        except OSError:  # pragma: no cover - defensive
+            cache_info["size_bytes"] = None
+
+        # Semantic index (optional) ----------------------------------------
+        semantic_info: dict[str, Any] = {"enabled": cfg.semantic_search.enabled}
+        if hasattr(ctx, "_semantic_index"):
+            try:
+                stats = ctx._semantic_index.stats()  # type: ignore[attr-defined]
+                semantic_info["chunks"] = stats.get("chunks")
+                semantic_info["documents"] = stats.get("documents")
+                semantic_info["model"] = stats.get("model")
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+
+        # Heuristic warnings ------------------------------------------------
+        snap_db_size = snapshot_info.get("index_db_size_bytes") or 0
+        if snap_db_size > 100 * 1024 * 1024:
+            warnings.append(
+                f"snapshot index db is {snap_db_size // (1024 * 1024)} MB "
+                "(> 100 MB) - consider version_purge"
+            )
+        if audit_info.get("size_bytes") and audit_info["size_bytes"] > 50 * 1024 * 1024:
+            warnings.append(
+                f"audit log is {audit_info['size_bytes'] // (1024 * 1024)} MB "
+                "(> 50 MB) - consider rotating or archiving"
+            )
+        if cache_info.get("size_bytes") and cache_info["size_bytes"] > 200 * 1024 * 1024:
+            warnings.append(
+                f"extract cache is {cache_info['size_bytes'] // (1024 * 1024)} MB "
+                "(> 200 MB) - call extract_cache.clear() to reset"
+            )
+
+        return {
+            "config": {
+                "max_file_size_mb": cfg.max_file_size_mb,
+                "default_encoding": cfg.default_encoding,
+                "auto_detect_encoding": cfg.auto_detect_encoding,
+                "exclude_patterns": list(cfg.exclude_patterns),
+            },
+            "roots": roots_info,
+            "snapshot_store": snapshot_info,
+            "audit_log": audit_info,
+            "extract_cache": cache_info,
+            "semantic_search": semantic_info,
+            "warnings": warnings,
+        }
+
+
+def _count_snapshots_via_sql(ctx: AppContext) -> int:
+    """Fallback snapshot counter when VersionStore has no count_all helper."""
+    import sqlite3
+    from contextlib import closing
+
+    try:
+        db_path = Path(ctx.versions._db_path)  # type: ignore[attr-defined]
+    except AttributeError:  # pragma: no cover - defensive
+        return -1
+    if not db_path.exists():
+        return 0
+    try:
+        with closing(sqlite3.connect(db_path)) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:  # pragma: no cover - defensive
+        return -1

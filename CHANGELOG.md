@@ -7,6 +7,197 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-05-17
+
+> **Major themes:** new authoring & analysis tooling (15 new tools), an
+> extensible lint subsystem with Indonesian academic presets, scoped
+> structured search/replace, Indonesian morphological search, structured
+> errors with hints + docs URLs, and a bundled template registry.
+
+### Added
+
+#### New MCP tools
+
+- **`content_diff`** - unified diff between any two files. Text formats
+  diff raw content; DOCX/XLSX/PPTX/PDF diff via `extract_for_search`.
+  Returns diff + line stats. Supports `context_lines` and
+  `ignore_whitespace`.
+- **`metadata_read_batch`** - bulk metadata reader walking a glob.
+  Returns format/meta per file with `fields` filter and a
+  `skipped_summary`.
+- **`workspace_diagnose`** - read-only health check covering config,
+  snapshot store, audit log, extract cache, semantic index, and
+  per-root disk usage. Surfaces oversized-store warnings.
+- **`compose_to_markdown`** - DOCX → Markdown via mammoth + html2text.
+  Tables, code blocks, lists, and headings preserved. `extract_images`
+  writes embedded images to `<dst_dir>/images/`.
+- **`compose_docx(template=...)`** - render a JSON spec into a copy of
+  an existing DOCX template, inheriting styles, headers, footers,
+  page setup, and cover pages. Useful for university templates.
+- **`section_extract`** - carve a section out of a DOCX into a
+  standalone file. Selection by heading-text regex (extracts from
+  matching heading inclusive to next equal/higher heading exclusive)
+  or by paragraph-index range.
+- **`section_merge`** - merge multiple DOCX files into one via
+  `docxcompose`. First source becomes master; conflicting style IDs
+  are renamed (`MyStyle_1`) when `preserve_styles=True`. Optional
+  page break between sources.
+- **`image_list` / `image_extract` / `image_extract_all` / `image_replace`** -
+  embedded image tools for DOCX/PPTX (full read+write) and PDF (read-only).
+  ZIP rebuild keeps `internal_name` stable so existing references
+  continue to point at the new image bytes.
+- **`template_render`** - Jinja2-style DOCX rendering via `docxtpl`.
+  Supports `{{ var }}` substitution, `{% for %}` loops, `{% if %}`
+  conditionals, and inline image injection (`{var: 'kp:/img.png'}`
+  or `{var: {path: ..., width_mm: 60}}`). Snapshots pre+post.
+- **`template_list` / `template_install` / `template_render_named`** -
+  built-in template registry under `templates/<category>/<name>/`.
+  Each entry ships with `template.docx`, `manifest.json`, and a
+  `README.md`. v1.1.0 ships with `academic_id/kp_basic` (a generic
+  Indonesian Kerja Praktik report skeleton).
+- **`toc_generate`** - static table of contents from heading
+  paragraphs. Walks Title + Heading 1..N up to `max_depth`,
+  inserts a `DAFTAR ISI` block. `insert_at` accepts `paragraph:N`
+  or `after:HEADING_TEXT`. `exclude_patterns` regex list skips
+  matching headings. Two layout styles: `dotted_leader`, `indented`.
+- **`bibliography_check`** - validate citations against the
+  bibliography section. Detects missing entries, unused entries,
+  duplicates, and style mismatches (APA / IEEE). Auto-detects
+  DAFTAR PUSTAKA / REFERENCES / Bibliography headings; override
+  via `bib_section_pattern`.
+- **`bibliography_format`** - reformat the bibliography section
+  alphabetically. `auto_fix=False` reports what would change;
+  `auto_fix=True` applies + snapshots.
+- **`document_compare`** - generate a comparison DOCX from two
+  source documents. Three styles: `track_changes` (inline
+  insertion/deletion markers), `side_by_side` (two-column table),
+  `diff_doc` (colored unified diff).
+- **`document_lint`** - run quality checks against a DOCX with a
+  pluggable rule registry. Built-in rules: `trailing_whitespace`,
+  `empty_heading`, `duplicate_heading`, `heading_hierarchy_skip`,
+  `title_case_id`, plus 13 `required_section_*` rules. Presets:
+  `default`, `academic_id`, `academic_id_kp` (KP report),
+  `academic_id_skripsi` (undergraduate thesis).
+- **`document_lint_fix`** - auto-fix lint issues. Defaults to
+  dry-run; `dry_run=False` applies + snapshots. `only_severities`
+  restricts which severities get fixed.
+- **DOCX `struct_get` `paragraph_runs:N`** - return per-run text
+  with bold/italic/underline flags. Companion `struct_set` accepts
+  a list of run dicts so callers can replace paragraph content
+  while preserving formatting.
+
+#### Indonesian language support
+
+- **Sastrawi morphological stemmer** integrated into `search_content`
+  via `language="id"` + `stem=True`. Query and document text both
+  get stemmed before matching, so `mengatakan` matches `berkata`,
+  `perkataan`, `kata-kata`, etc. Acronyms (≤5 uppercase chars) are
+  preserved verbatim. Available via the optional `[indonesian]` extra.
+- **Indonesian rule presets** (`academic_id`, `academic_id_kp`,
+  `academic_id_skripsi`) check structural conventions of Indonesian
+  academic documents - LEMBAR PENGESAHAN, KATA PENGANTAR, DAFTAR
+  ISI, BAB I PENDAHULUAN, LOG BOOK, etc.
+- **Bundled `academic_id/kp_basic` template** - generic Indonesian
+  KP report skeleton with cover page, lembar pengesahan, kata
+  pengantar, daftar isi, BAB I/II, log book table, lampiran, and
+  daftar pustaka. Ships with the wheel under
+  `share/dokumen-pintar/templates/`.
+
+#### Internal building blocks
+
+- **`lint/` subsystem** - `LintRule` base class, `Issue` dataclass,
+  `default_registry` with rule + preset management. Rules register
+  via `@register_rule`; presets via `add_preset(name, rules=...,
+  extends=...)`. Cycle detection on `extends` chains.
+- **`utils/stemming_id.py`** - thread-safe Sastrawi wrapper with
+  process-wide stemmer cache.
+- **`tools/_common.py`** - new helpers `resolve_for_read` /
+  `resolve_for_write` shared across all new tools.
+
+### Changed
+
+- **`version_purge(older_than_days=0)` now explicitly purges ALL
+  snapshots** (was: silent no-op). Negative values raise
+  `ValueError`. Pass `None` and configure `retention_days = 0`
+  for the old behaviour.
+- **Glob `**/*` matches both top-level and nested files**
+  (was: nested only). `**/*.txt` catches `top.txt` AND
+  `sub/nested.txt`.
+- **Line endings (CRLF / LF / CR) preserved** across
+  `content_replace`, `content_insert`, `content_delete_range`,
+  `content_append`, and `content_patch`. Eliminates spurious
+  git-diff churn on Windows files.
+- **`extract_for_search` for PDF prefers pypdf over pdfplumber.**
+  pypdf handles the vast majority of search workloads adequately
+  while costing ~5-10x less parser time. pdfplumber stays as a
+  fallback for PDFs pypdf can't extract.
+- **XLSX read paths use `read_only=True`** (`read_meta`,
+  `read_text`, `extract_for_search`). 5-20x faster on large
+  workbooks, fraction of the memory.
+- **`search_content` accepts `include_context=True`** to enrich
+  DOCX hits with `paragraph_index` + `heading_path`. Default
+  `False` keeps the v1.0.x response shape.
+- **`struct_get` for DOCX accepts `table:N!A1`, `table:N!row:M`,
+  `table:N!col:M`** sub-expressions for cell/row/column-level
+  access without parsing the whole table response.
+- **`batch_replace_structured` accepts a `scope` dict** to restrict
+  replacements:
+  - DOCX: `{headings_only, tables_only, paragraph_range,
+    heading_section, exclude_styles, include_styles}`
+  - XLSX: `{sheets, cell_range}`
+  - PPTX: `{slides}`
+- **`DokumenPintarError` now carries `hint`, `docs_url`, and `code`
+  fields.** Backward-compatible: existing single-arg call sites
+  unchanged. The new fields render in `str(exc)` and serialise
+  via `exc.to_dict()`.
+- **`VersionStore` SQLite uses thread-local connection pool.**
+- **`extract_cache.sqlite`** caches `extract_for_search` results
+  keyed on `(mtime, size)`. Repeat searches across the same
+  workspace skip parsing entirely.
+
+### Fixed
+
+- **`struct_delete` now supports JSONPath list indices**
+  (`$.array[N]`). v1.0.x raised on `Index(...)` segments because
+  the dispatcher only checked the legacy `index` attribute; newer
+  `jsonpath_ng` releases expose `indices` (a tuple). Fix accepts
+  both, deletes from highest index first so list slices stay
+  consistent.
+- **Repository hygiene**: `htmlcov/`, `.coverage`, `rawr/`,
+  `tests_e2e_rawr.py`, `dokumen-pintar.config.json` properly
+  gitignored.
+
+### Performance
+
+- `extract_for_search` cache hit ~80 ms vs ~8 s cold call on
+  a 1 GB mixed-format workspace.
+- PDF extraction ~5-10x faster on the typical path
+  (50-page PDFs: ~600 ms → ~110 ms).
+- XLSX query ops 5-20x faster on workbooks > 1 MB.
+
+### Documentation
+
+- **`AGENTS.md`** - contributor guide (hard rules, repo layout,
+  request flow, how to add a tool / handler / preset, PR process).
+- **`docs/BENCHMARK.md`** - performance baselines and methodology.
+- **`docs/profiles/`** - six pre-tuned config profiles (minimal,
+  personal, developer, research, read-only, team-server).
+- **`docs/config.schema.json`** - JSON Schema for editor autocomplete.
+- **README polish** - accurate tool count, killer-feature section,
+  links to BENCHMARK and AGENTS.
+
+### Dependencies
+
+Added (core):
+- `mammoth>=1.12` - DOCX → HTML for markdown conversion
+- `html2text>=2024.2` - HTML → Markdown post-processor
+- `docxcompose>=2.1` - DOCX merge with style preservation
+- `docxtpl>=0.20` - Jinja2-style DOCX templating
+
+Added optional extras:
+- `[indonesian]`: `Sastrawi>=1.0.1` for morphological stemming.
+
+
 ## [1.0.2] - 2026-05-15
 
 ### Added

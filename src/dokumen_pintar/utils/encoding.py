@@ -42,12 +42,51 @@ def detect_encoding(data: bytes, default: str = "utf-8") -> str:
     return _slow_detect(data, default)
 
 
+def detect_line_ending(data: bytes | str, default: str = "\n") -> str:
+    """Detect the predominant line ending in ``data``.
+
+    Returns one of ``"\\r\\n"``, ``"\\r"``, ``"\\n"``. ``default`` is
+    returned when the input has no line terminators at all - we cannot
+    sensibly preserve what isn't there. ``str`` input is encoded as
+    UTF-8 before counting, which is loss-free for the byte sequences
+    we care about (CR, LF).
+    """
+    if isinstance(data, str):
+        data = data.encode("utf-8", errors="replace")
+    crlf = data.count(b"\r\n")
+    lf = data.count(b"\n") - crlf
+    cr = data.count(b"\r") - crlf
+    if crlf == 0 and lf == 0 and cr == 0:
+        return default
+    if crlf >= lf and crlf >= cr:
+        return "\r\n"
+    if cr > lf:
+        return "\r"
+    return "\n"
+
+
 def read_text(
     path: Path, *, encoding: str | None = None, auto_detect: bool = True
 ) -> tuple[str, str]:
     raw = path.read_bytes()
     enc = encoding or (detect_encoding(raw) if auto_detect else "utf-8")
     return raw.decode(enc, errors="replace"), enc
+
+
+def read_text_with_eol(
+    path: Path, *, encoding: str | None = None, auto_detect: bool = True
+) -> tuple[str, str, str]:
+    """Like :func:`read_text` but also returns the file's line ending.
+
+    Returns ``(text, encoding, line_ending)`` where ``line_ending`` is
+    one of ``"\\r\\n"``, ``"\\r"``, ``"\\n"``. Callers that mutate
+    text and write it back should pass the returned line ending to
+    :func:`write_text` to keep the on-disk representation stable.
+    """
+    raw = path.read_bytes()
+    enc = encoding or (detect_encoding(raw) if auto_detect else "utf-8")
+    eol = detect_line_ending(raw)
+    return raw.decode(enc, errors="replace"), enc, eol
 
 
 def write_text(path: Path, content: str, *, encoding: str = "utf-8", newline: str = "\n") -> None:

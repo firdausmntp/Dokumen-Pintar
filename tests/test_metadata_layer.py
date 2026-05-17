@@ -970,3 +970,152 @@ class TestMetadataTools:
         actions = {v["action"] for v in versions["versions"]}
         assert "metadata_strip_pre" in actions
         assert "metadata_strip_post" in actions
+
+
+
+# ── v1.1.0 2.3: metadata_read_batch ──
+
+
+def test_metadata_read_batch_mixed_formats(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Bulk reader returns metadata for every supported file matching the glob."""
+    import openpyxl
+    from docx import Document
+    from PIL import Image as _Image
+
+    docs_dir, _ = tmp_roots
+
+    # DOCX
+    docx_path = docs_dir / "report.docx"
+    doc = Document()
+    doc.core_properties.title = "Report"
+    doc.add_paragraph("hello")
+    doc.save(str(docx_path))
+
+    # XLSX
+    xlsx_path = docs_dir / "data.xlsx"
+    wb = openpyxl.Workbook()
+    wb.properties.title = "Sheet"
+    wb.active["A1"] = "x"
+    wb.save(xlsx_path)
+
+    # JPEG
+    jpg_path = docs_dir / "photo.jpg"
+    _Image.new("RGB", (32, 32), "red").save(jpg_path, "JPEG")
+
+    # Plain text (no read_meta on text handler in this version)
+    (docs_dir / "note.txt").write_text("plain", encoding="utf-8")
+
+    cfg = make_config()
+    ctx = build_context(cfg)
+    mcp = FastMCP(name="t-batch")
+    metadata_tool.register(mcp, ctx)
+    metadata_tool.register_batch(mcp, ctx)
+
+    fn = mcp._tool_manager._tools["metadata_read_batch"].fn
+    result = fn(glob="documents:/*")
+
+    formats = {entry["format"] for entry in result["files"]}
+    assert "docx" in formats
+    assert "xlsx" in formats
+    # JPG handled by image handler.
+    assert any(entry["format"] == "image" for entry in result["files"])
+    assert result["count"] >= 3
+
+
+def test_metadata_read_batch_field_filter(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`fields` filter restricts the returned meta dict per file."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "f.docx"
+    doc = Document()
+    doc.core_properties.title = "T"
+    doc.core_properties.author = "A"
+    doc.save(str(p))
+
+    cfg = make_config()
+    ctx = build_context(cfg)
+    mcp = FastMCP(name="t-fields")
+    metadata_tool.register(mcp, ctx)
+    metadata_tool.register_batch(mcp, ctx)
+
+    fn = mcp._tool_manager._tools["metadata_read_batch"].fn
+    result = fn(glob="documents:/*.docx", fields=["paragraph_count"])
+    assert result["count"] == 1
+    meta = result["files"][0]["meta"]
+    assert "paragraph_count" in meta
+    # Field filter dropped everything else.
+    assert "core_props" not in meta
+
+
+def test_metadata_read_batch_skips_unhandled_files(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Files whose handler raises during read_meta land in `skipped` with reason."""
+    docs_dir, _ = tmp_roots
+    # File with unsupported extension -> no handler.
+    (docs_dir / "weird.unknownext").write_text("?", encoding="utf-8")
+
+    cfg = make_config()
+    ctx = build_context(cfg)
+    mcp = FastMCP(name="t-skip")
+    metadata_tool.register(mcp, ctx)
+    metadata_tool.register_batch(mcp, ctx)
+
+    fn = mcp._tool_manager._tools["metadata_read_batch"].fn
+    result = fn(glob="documents:/*.unknownext")
+    assert result["count"] == 0
+    assert result["skipped"][0]["reason"] == "no_handler"
+    assert result["skipped_summary"]["no_handler"] == 1
+
+
+def test_metadata_read_batch_max_files_truncates(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    from docx import Document
+    for i in range(3):
+        d = Document()
+        d.add_paragraph(f"p{i}")
+        d.save(str(docs_dir / f"d{i}.docx"))
+
+    cfg = make_config()
+    ctx = build_context(cfg)
+    mcp = FastMCP(name="t-max")
+    metadata_tool.register(mcp, ctx)
+    metadata_tool.register_batch(mcp, ctx)
+
+    fn = mcp._tool_manager._tools["metadata_read_batch"].fn
+    # Truncated at 2 even though 3 docx files match.
+    result = fn(glob="documents:/*.docx", max_files=2)
+    assert result["count"] <= 2
+
+
+def test_metadata_read_batch_handler_raises(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """A handler raising during read_meta is caught and reported as skipped."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "bad.docx"
+    d = Document()
+    d.add_paragraph("ok")
+    d.save(str(p))
+
+    cfg = make_config()
+    ctx = build_context(cfg)
+    mcp = FastMCP(name="t-raise")
+    metadata_tool.register(mcp, ctx)
+    metadata_tool.register_batch(mcp, ctx)
+
+    handler = ctx.registry.for_path(p.absolute())
+    fn = mcp._tool_manager._tools["metadata_read_batch"].fn
+    with patch.object(handler, "read_meta", side_effect=ValueError("boom")):
+        result = fn(glob="documents:/*.docx")
+    assert result["count"] == 0
+    assert result["skipped"][0]["reason"] == "read_failed"

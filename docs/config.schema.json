@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/firdausmntp/Dokumen-Pintar/blob/main/docs/config.schema.json",
+  "title": "Dokumen-Pintar configuration",
+  "description": "Configuration for the Dokumen-Pintar MCP server. Drop the `$schema` reference into your JSON file to get autocomplete + validation in editors that support it (VS Code, Cursor, IntelliJ, Zed).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["roots"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this schema. Editors use it for autocomplete; the server strips it before validation."
+    },
+    "roots": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Workspace roots the server may access. At least one is required. Names must be unique.",
+      "items": { "$ref": "#/$defs/RootConfig" }
+    },
+    "exclude_patterns": {
+      "type": "array",
+      "description": "Glob patterns that the server skips during tree walks, searches, and batch operations. Patterns match against the relative posix path within a root, not just the filename.",
+      "items": { "type": "string" },
+      "default": [
+        "**/node_modules/**",
+        "**/.git/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+        "**/.mcpdocs/**"
+      ]
+    },
+    "max_file_size_mb": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 100,
+      "description": "Files larger than this are rejected by every tool that reads bytes. Limit applies to the on-disk size, including ZIP-compressed Office files."
+    },
+    "default_encoding": {
+      "type": "string",
+      "default": "utf-8",
+      "description": "Fallback encoding for text writes and when auto-detect is inconclusive."
+    },
+    "auto_detect_encoding": {
+      "type": "boolean",
+      "default": true,
+      "description": "Sniff file encoding before reading. Falls back to default_encoding."
+    },
+    "versioning": { "$ref": "#/$defs/VersioningConfig" },
+    "audit": { "$ref": "#/$defs/AuditConfig" },
+    "transport": { "$ref": "#/$defs/TransportConfig" },
+    "semantic_search": { "$ref": "#/$defs/SemanticSearchConfig" },
+    "safety": { "$ref": "#/$defs/SafetyConfig" }
+  },
+  "$defs": {
+    "RootConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Alphanumeric identifier (dashes / underscores allowed). Used in workspace URIs like `<name>:/relative/path`."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute or `~`-expanded path to the root directory. Environment variables (`$VAR`, `${VAR}`) are expanded at load time."
+        },
+        "writable": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, every mutating tool refuses changes to this root."
+        }
+      }
+    },
+    "VersioningConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch for the snapshot store. When false, version_* tools return empty and destructive operations are unrecoverable."
+        },
+        "storage_mode": {
+          "type": "string",
+          "enum": ["per_root", "global", "flexible"],
+          "default": "flexible",
+          "description": "per_root keeps snapshots inside each root; global puts them in global_storage_path; flexible tries per_root and falls back to global if a root is read-only."
+        },
+        "global_storage_path": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Absolute path used by global / flexible storage modes. Null = platform-appropriate user data directory."
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30,
+          "description": "Snapshots older than this are pruned by version_purge. 0 disables age-based pruning."
+        },
+        "max_versions_per_file": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50,
+          "description": "Maximum number of snapshots kept per file. Oldest entries are pruned when exceeded."
+        }
+      }
+    },
+    "AuditConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Append every mutating tool call to a JSONL audit log."
+        },
+        "log_path": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Absolute path. Null = .mcpdocs/audit.jsonl in the first writable root."
+        }
+      }
+    },
+    "TransportConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stdio": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable stdio transport (Claude Desktop, Cursor, VS Code, Windsurf). Standard for local use."
+        },
+        "http": { "$ref": "#/$defs/HTTPTransport" }
+      }
+    },
+    "HTTPTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable HTTP/SSE transport via uvicorn."
+        },
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Bind address. Keep as 127.0.0.1 unless you intend to expose the server."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 7878
+        },
+        "auth_token": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Bearer token required on HTTP requests. Null = no auth. Always set this when host != 127.0.0.1."
+        }
+      }
+    },
+    "SemanticSearchConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Registers search_semantic, semantic_index_path, semantic_stats. Requires the [semantic] extra."
+        },
+        "model": {
+          "type": "string",
+          "default": "sentence-transformers/all-MiniLM-L6-v2",
+          "description": "HuggingFace model id used for embedding."
+        },
+        "index_path": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "SQLite vector index location. Null = platform user-data directory."
+        },
+        "auto_index_globs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/*.txt", "**/*.md"]
+        },
+        "chunk_size": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 512
+        },
+        "chunk_overlap": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 64
+        }
+      }
+    },
+    "SafetyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_sensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false, blocks .env, credential files, private keys, .ssh, etc."
+        },
+        "follow_symlinks": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false, symlinks are not followed - prevents sandbox escape via symlinks."
+        },
+        "validate_roundtrip_writes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verify structured writes are re-readable. Small overhead, catches handler bugs."
+        }
+      }
+    }
+  }
+}

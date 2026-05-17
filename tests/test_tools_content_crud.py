@@ -582,3 +582,161 @@ def test_docx_write_text_refuses_overwrite_existing(tmp_path: Path) -> None:
     with pytest.raises(HandlerError, match="refuses to overwrite"):
         handler.write_text(target, "replacement")
     assert target.read_bytes() == original
+
+
+
+# ── v1.1.0 Quick Win 2.1: content_diff ──
+
+
+def test_content_diff_identical_files(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "a.txt"
+    b = docs_dir / "b.txt"
+    a.write_text("same\ncontent\n", encoding="utf-8")
+    b.write_text("same\ncontent\n", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    assert result["identical"] is True
+    assert result["diff"] == ""
+    assert result["stats"]["changes"] == 0
+
+
+def test_content_diff_text_with_changes(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "v1.txt"
+    b = docs_dir / "v2.txt"
+    a.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    b.write_text("alpha\nBETA\ngamma\ndelta\n", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    assert result["identical"] is False
+    assert "BETA" in result["diff"]
+    assert "delta" in result["diff"]
+    assert result["stats"]["additions"] >= 1
+    assert result["stats"]["deletions"] >= 1
+    assert result["stats"]["changes"] == result["stats"]["additions"] + result["stats"]["deletions"]
+
+
+def test_content_diff_ignore_whitespace(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "ws_a.txt"
+    b = docs_dir / "ws_b.txt"
+    a.write_text("hello   world", encoding="utf-8")
+    b.write_text("hello\tworld", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(
+        path_a=str(a), path_b=str(b), ignore_whitespace=True
+    )
+    assert result["identical"] is True
+
+
+def test_content_diff_negative_context_rejected(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "a.txt"
+    b = docs_dir / "b.txt"
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    with pytest.raises(ValidationError, match=r"context_lines"):
+        _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b), context_lines=-1)
+
+
+def test_content_diff_unknown_format_uses_raw_text(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Files without a registered handler diff via raw text encoding."""
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "a.unknownext"
+    b = docs_dir / "b.unknownext"
+    a.write_bytes(b"line1\nline2\n")
+    b.write_bytes(b"line1\nLINE2\n")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    assert result["identical"] is False
+    assert result["format_a"] == "text"
+    assert result["format_b"] == "text"
+
+
+def test_content_diff_docx_uses_extracted_view(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """DOCX files diff via the search-extracted view (refuse_binary_text path)."""
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "rep_a.docx"
+    b = docs_dir / "rep_b.docx"
+    _make_docx(a, ["alpha", "beta", "gamma"])
+    _make_docx(b, ["alpha", "BETA", "gamma"])
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    assert result["identical"] is False
+    assert result["format_a"] == "docx"
+    assert result["format_b"] == "docx"
+    assert "BETA" in result["diff"]
+
+
+def test_content_diff_xlsx_uses_extracted_view(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """XLSX has no read_text -> falls back to extract_for_search for the diff."""
+    import openpyxl
+
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "data_a.xlsx"
+    b = docs_dir / "data_b.xlsx"
+    wb_a = openpyxl.Workbook()
+    wb_a.active["A1"] = "hello"
+    wb_a.save(a)
+    wb_b = openpyxl.Workbook()
+    wb_b.active["A1"] = "world"
+    wb_b.save(b)
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    assert result["identical"] is False
+    assert result["format_a"] == "xlsx"
+
+
+
+def test_content_diff_handler_raises_unsupported_falls_back_to_extract(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """If a handler's read_text raises UnsupportedFormatError, the diff
+    falls back to the extract_for_search view (covers the defensive
+    branch in _read_for_diff)."""
+    from unittest.mock import patch
+
+    from dokumen_pintar.errors import UnsupportedFormatError
+
+    docs_dir, _ = tmp_roots
+    a = docs_dir / "fb_a.txt"
+    b = docs_dir / "fb_b.txt"
+    a.write_text("alpha", encoding="utf-8")
+    b.write_text("beta", encoding="utf-8")
+    mcp, ctx = _setup(make_config())
+    handler = ctx.registry.for_path(a.absolute())
+
+    real_read_text = handler.read_text
+    real_extract = handler.extract_for_search
+
+    def fake_read_text(*_args: Any, **_kwargs: Any) -> str:
+        raise UnsupportedFormatError("forced for test")
+
+    with patch.object(handler, "read_text", side_effect=fake_read_text):
+        with patch.object(
+            handler,
+            "extract_for_search",
+            side_effect=lambda p: real_read_text(p),
+        ):
+            result = _tool(mcp, "content_diff")(path_a=str(a), path_b=str(b))
+    # Sanity: real handlers were patched, but real_extract is unused -
+    # silence the linter without affecting the assertion.
+    _ = real_extract
+    assert result["identical"] is False
+    assert "alpha" in result["diff"] or "beta" in result["diff"]

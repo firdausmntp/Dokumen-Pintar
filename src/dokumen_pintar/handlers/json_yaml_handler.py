@@ -80,34 +80,62 @@ def _key_count(value: Any) -> int | None:
     return None
 
 
+def _match_index_for_sort(match: Any) -> int:
+    """Return a sortable integer index for a jsonpath-ng match.
+
+    Used to delete list items from highest-to-lowest so earlier indices
+    stay valid. Non-list matches sort first (returning -1) - their order
+    among themselves is irrelevant since they live on different parents.
+    """
+    path = match.path
+    indices_attr = getattr(path, "indices", None)
+    if indices_attr:
+        return int(indices_attr[0])
+    index_attr = getattr(path, "index", None)
+    if index_attr is not None:
+        return int(index_attr)
+    return -1
+
+
 def _delete_match(match: Any) -> None:
     """Delete a jsonpath-ng ``match`` from its parent container.
 
-    Works for both dict and list parents. Uses ``match.full_path`` walked
-    against the root when ``match.context`` is unavailable.
+    Works for both dict and list parents. ``jsonpath_ng.Index`` exposes
+    ``indices`` (a tuple, even for a single index like ``[1]``); some
+    older paths exposed a singular ``index`` attribute. We accept either
+    so callers do not have to care which.
     """
-
     parent: Any = match.context.value if match.context is not None else None
     if parent is None:
         raise HandlerError("cannot delete root element via jsonpath")
 
     path = match.path
     fields = getattr(path, "fields", None)
-    index = getattr(path, "index", None)
+    indices_attr: tuple[int, ...] | None = getattr(path, "indices", None)
+    index_attr = getattr(path, "index", None)
+    # Coerce to a single canonical list of indices we can iterate over.
+    indices: list[int] | None = None
+    if indices_attr is not None:
+        indices = list(indices_attr)
+    elif index_attr is not None:
+        indices = [int(index_attr)]
 
     if isinstance(parent, dict):
         if fields:
             for field in fields:
                 parent.pop(field, None)
-        elif index is not None:
+        elif indices is not None:
             # Dict addressed with an integer? Try string fallback.
-            parent.pop(str(index), None)
+            for idx in indices:
+                parent.pop(str(idx), None)
         else:
             raise HandlerError(f"unsupported jsonpath segment for dict: {path!r}")
     elif isinstance(parent, list):
-        if index is not None:
-            if 0 <= index < len(parent):  # pragma: no branch
-                del parent[index]
+        if indices is not None:
+            # Delete from highest index first so earlier indices stay valid.
+            for idx in sorted(indices, reverse=True):
+                if 0 <= idx < len(parent):
+                    del parent[idx]
         else:
             raise HandlerError(f"unsupported jsonpath segment for list: {path!r}")
     else:
@@ -206,11 +234,10 @@ class JsonHandler:
         if not matches:
             return
         # Delete from deepest indices first so list mutations stay correct.
-        for match in sorted(
-            matches,
-            key=lambda m: getattr(m.path, "index", -1) or -1,
-            reverse=True,
-        ):
+        # Newer jsonpath-ng versions surface list indices via ``indices``
+        # (a tuple); older paths used ``index``. ``_match_index_for_sort``
+        # normalises both to a single int we can sort on.
+        for match in sorted(matches, key=_match_index_for_sort, reverse=True):
             _delete_match(match)
         serialized = json.dumps(data, indent=2, ensure_ascii=False)
         self.write_text(path, serialized + "\n")
@@ -334,11 +361,7 @@ class YamlHandler:
         matches = list(parser.find(data))
         if not matches:
             return
-        for match in sorted(
-            matches,
-            key=lambda m: getattr(m.path, "index", -1) or -1,
-            reverse=True,
-        ):
+        for match in sorted(matches, key=_match_index_for_sort, reverse=True):
             _delete_match(match)
         self._dump_file(path, data)
 

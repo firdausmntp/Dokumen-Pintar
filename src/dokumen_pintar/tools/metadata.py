@@ -4,7 +4,7 @@ These tools dispatch to the per-format handler's ``write_meta`` /
 ``strip_meta`` methods. All operations are snapshotted via the version
 store so they can be rolled back with ``version_restore``.
 
-Supported targets in v1.0.2:
+Supported targets in v1.1.0:
 
 - **Images** (.jpg, .jpeg, .tif, .tiff, .webp): EXIF tags via piexif.
 - **DOCX / XLSX / PPTX**: OOXML core properties (author, title, etc.).
@@ -24,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 from ..context import AppContext
 from ..errors import HandlerError, UnsupportedFormatError
 from ..handlers.base import HandlerCapability
+from ..utils.walking import iter_files
 from ._common import resolve_for_write, summarize_resolved
 
 
@@ -32,13 +33,9 @@ def _require_writable(ctx: AppContext, path: str):
     resolved = resolve_for_write(ctx, path)
     handler = ctx.registry.for_path(resolved.absolute)
     if handler is None:
-        raise UnsupportedFormatError(
-            f"no handler registered for {resolved.absolute.suffix!r}"
-        )
+        raise UnsupportedFormatError(f"no handler registered for {resolved.absolute.suffix!r}")
     if not (handler.capabilities & HandlerCapability.WRITE_META):
-        raise UnsupportedFormatError(
-            f"handler {handler.name!r} does not support metadata writes"
-        )
+        raise UnsupportedFormatError(f"handler {handler.name!r} does not support metadata writes")
     return resolved, handler
 
 
@@ -57,9 +54,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)  # read also goes through guard
         handler = ctx.registry.for_path(resolved.absolute)
         if handler is None:
-            raise UnsupportedFormatError(
-                f"no handler registered for {resolved.absolute.suffix!r}"
-            )
+            raise UnsupportedFormatError(f"no handler registered for {resolved.absolute.suffix!r}")
         meta = handler.read_meta(resolved.absolute)
         ctx.audit.log("metadata_read", path=str(resolved.absolute))
         return {
@@ -160,9 +155,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         if not hasattr(handler, "strip_meta"):  # pragma: no cover — guarded
             # by the WRITE_META capability check; every handler with that
             # flag implements strip_meta.
-            raise UnsupportedFormatError(
-                f"handler {handler.name!r} does not implement strip_meta"
-            )
+            raise UnsupportedFormatError(f"handler {handler.name!r} does not implement strip_meta")
 
         ctx.versions.snapshot(
             root_name=resolved.root.name,
@@ -185,3 +178,52 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             "format": handler.name,
             **result,
         }
+
+
+
+def register_batch(mcp: FastMCP, ctx: AppContext) -> None:
+    """Register the bulk metadata reader. Called from server._build_server."""
+
+    @mcp.tool(
+        name="metadata_read_batch",
+        description=(
+            "Read metadata for every file matching `glob`. Skips files whose "
+            "handler does not implement read_meta or whose parser fails. "
+            "Returns a list of {uri, format, meta} entries plus a count."
+        ),
+    )
+    def metadata_read_batch(
+        glob: str,
+        fields: list[str] | None = None,
+        max_files: int = 5000,
+    ) -> dict[str, Any]:
+        files: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        scanned = 0
+        for root_name, p, root_abs in iter_files(ctx, glob=glob):
+            scanned += 1
+            if scanned > max_files:
+                break
+            uri = f"{root_name}:/{p.relative_to(root_abs).as_posix()}"
+            handler = ctx.registry.for_path(p)
+            if handler is None:
+                skipped.append({"uri": uri, "reason": "no_handler"})
+                continue
+            try:
+                ctx.guard.ensure_within_size_limit(p)
+                meta = handler.read_meta(p)
+            except Exception as exc:  # noqa: BLE001
+                skipped.append({"uri": uri, "reason": "read_failed", "error": str(exc)})
+                continue
+            if fields is not None:
+                meta = {k: meta.get(k) for k in fields if k in meta}
+            files.append({"uri": uri, "absolute": str(p), "format": handler.name, "meta": meta})
+        ctx.audit.log("metadata_read_batch", glob=glob, count=len(files))
+        result: dict[str, Any] = {"glob": glob, "count": len(files), "files": files}
+        if skipped:
+            result["skipped"] = skipped
+            summary: dict[str, int] = {}
+            for s in skipped:
+                summary[s["reason"]] = summary.get(s["reason"], 0) + 1
+            result["skipped_summary"] = summary
+        return result

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 from typing import Any
 
@@ -9,11 +10,10 @@ from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
 from ..errors import HandlerError, UnsupportedFormatError, ValidationError
-from ..utils.encoding import read_text, write_text
+from ..utils.encoding import read_text_with_eol, write_text
 from ..utils.locks import file_lock
 from ._common import (
     BINARY_CONTAINER_FORMATS,
-    handler_for,
     refuse_binary_text_op,
     resolve_for_read,
     resolve_for_write,
@@ -32,17 +32,29 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             )
         return None
 
-    def _read_for_text(resolved) -> tuple[str, str]:  # type: ignore[no-untyped-def]
+    def _read_for_text(resolved) -> tuple[str, str, str]:  # type: ignore[no-untyped-def]
+        """Return ``(text, encoding, line_ending)`` for ``resolved``.
+
+        The third return value is the file's predominant line ending
+        (``"\\r\\n"``, ``"\\r"``, or ``"\\n"``). Callers thread it back
+        through :func:`write_text` so the on-disk representation is
+        preserved across mutations - no spurious git-diff churn from
+        a CRLF file losing its CRs after ``content_replace``.
+
+        Handler-aware paths (DOCX/PDF/XLSX) yield UTF-8 ``\\n``-line
+        text - the line ending field is informational and used only by
+        callers that subsequently raw-write through :func:`write_text`.
+        """
         ctx.guard.ensure_within_size_limit(resolved.absolute)
         # Prefer handler-aware text extraction so DOCX/PDF etc still work.
         handler = ctx.registry.for_path(resolved.absolute)
         if handler is not None:
             try:
                 text = handler.read_text(resolved.absolute)
-                return text, "utf-8"
+                return text, "utf-8", "\n"
             except UnsupportedFormatError:
                 pass
-        return read_text(resolved.absolute, auto_detect=ctx.config.auto_detect_encoding)
+        return read_text_with_eol(resolved.absolute, auto_detect=ctx.config.auto_detect_encoding)
 
     @mcp.tool(
         name="content_read",
@@ -59,7 +71,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         encoding: str | None = None,
     ) -> dict[str, Any]:
         resolved = resolve_for_read(ctx, path)
-        text, used_encoding = _read_for_text(resolved)
+        text, used_encoding, _eol = _read_for_text(resolved)
         lines = text.splitlines(keepends=True)
         if start_line is not None or end_line is not None:
             s = max(1, start_line or 1) - 1
@@ -128,14 +140,14 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)
         refuse_binary_text_op(ctx, resolved, "content_append")
         with file_lock(resolved.absolute):
-            existing, used_enc = (
+            existing, used_enc, eol = (
                 _read_for_text(resolved)
                 if resolved.absolute.exists()
-                else ("", ctx.config.default_encoding)
+                else ("", ctx.config.default_encoding, "\n")
             )
             _snapshot(resolved, "append_pre")
             new_text = existing + content
-            write_text(resolved.absolute, new_text, encoding=used_enc)
+            write_text(resolved.absolute, new_text, encoding=used_enc, newline=eol)
             snap = _snapshot(resolved, "append_post")
         ctx.audit.log("content_append", path=str(resolved.absolute))
         return {**summarize_resolved(resolved), "snapshot": snap, "new_size": len(new_text)}
@@ -152,17 +164,17 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)
         refuse_binary_text_op(ctx, resolved, "content_insert")
         with file_lock(resolved.absolute):
-            existing, used_enc = (
+            existing, used_enc, eol = (
                 _read_for_text(resolved)
                 if resolved.absolute.exists()
-                else ("", ctx.config.default_encoding)
+                else ("", ctx.config.default_encoding, "\n")
             )
             lines = existing.splitlines(keepends=True)
             idx = min(line_number - 1, len(lines))
             insert_block = content if content.endswith("\n") else content + "\n"
             new_text = "".join(lines[:idx]) + insert_block + "".join(lines[idx:])
             _snapshot(resolved, "insert_pre")
-            write_text(resolved.absolute, new_text, encoding=used_enc)
+            write_text(resolved.absolute, new_text, encoding=used_enc, newline=eol)
             snap = _snapshot(resolved, "insert_post")
         ctx.audit.log("content_insert", path=str(resolved.absolute), line=line_number)
         return {**summarize_resolved(resolved), "snapshot": snap}
@@ -184,7 +196,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)
         refuse_binary_text_op(ctx, resolved, "content_replace")
         with file_lock(resolved.absolute):
-            text, used_enc = _read_for_text(resolved)
+            text, used_enc, eol = _read_for_text(resolved)
             if regex:
                 if count < 0:
                     new_text, n = re.subn(old, new, text)
@@ -200,7 +212,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             if n == 0:
                 return {**summarize_resolved(resolved), "replacements": 0}
             _snapshot(resolved, "replace_pre")
-            write_text(resolved.absolute, new_text, encoding=used_enc)
+            write_text(resolved.absolute, new_text, encoding=used_enc, newline=eol)
             snap = _snapshot(resolved, "replace_post")
         ctx.audit.log("content_replace", path=str(resolved.absolute), replacements=n, regex=regex)
         return {**summarize_resolved(resolved), "replacements": n, "snapshot": snap}
@@ -215,12 +227,12 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)
         refuse_binary_text_op(ctx, resolved, "content_delete_range")
         with file_lock(resolved.absolute):
-            text, used_enc = _read_for_text(resolved)
+            text, used_enc, eol = _read_for_text(resolved)
             lines = text.splitlines(keepends=True)
             new_lines = lines[: start_line - 1] + lines[end_line:]
             new_text = "".join(new_lines)
             _snapshot(resolved, "delete_range_pre")
-            write_text(resolved.absolute, new_text, encoding=used_enc)
+            write_text(resolved.absolute, new_text, encoding=used_enc, newline=eol)
             snap = _snapshot(resolved, "delete_range_post")
         ctx.audit.log(
             "content_delete_range",
@@ -241,13 +253,109 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         resolved = resolve_for_write(ctx, path)
         refuse_binary_text_op(ctx, resolved, "content_patch")
         with file_lock(resolved.absolute):
-            text, used_enc = _read_for_text(resolved)
+            text, used_enc, eol = _read_for_text(resolved)
             patched = _apply_unified_diff(text, unified_diff)
             _snapshot(resolved, "patch_pre")
-            write_text(resolved.absolute, patched, encoding=used_enc)
+            write_text(resolved.absolute, patched, encoding=used_enc, newline=eol)
             snap = _snapshot(resolved, "patch_post")
         ctx.audit.log("content_patch", path=str(resolved.absolute))
         return {**summarize_resolved(resolved), "snapshot": snap}
+
+    @mcp.tool(
+        name="content_diff",
+        description=(
+            "Unified diff between two files. Works on text files directly. "
+            "For binary container formats (DOCX/XLSX/PPTX/PDF), the handler's "
+            "`extract_for_search` view is diffed - useful for spotting prose "
+            "changes but not formatting. Returns the diff text plus simple "
+            "line-count statistics."
+        ),
+    )
+    def content_diff(
+        path_a: str,
+        path_b: str,
+        context_lines: int = 3,
+        ignore_whitespace: bool = False,
+    ) -> dict[str, Any]:
+        if context_lines < 0:
+            raise ValidationError("context_lines must be >= 0")
+        resolved_a = resolve_for_read(ctx, path_a)
+        resolved_b = resolve_for_read(ctx, path_b)
+        text_a, fmt_a = _read_for_diff(resolved_a)
+        text_b, fmt_b = _read_for_diff(resolved_b)
+
+        norm_a, norm_b = text_a, text_b
+        if ignore_whitespace:
+            norm_a = re.sub(r"\s+", " ", text_a).strip()
+            norm_b = re.sub(r"\s+", " ", text_b).strip()
+
+        if norm_a == norm_b:
+            return {
+                "path_a": summarize_resolved(resolved_a),
+                "path_b": summarize_resolved(resolved_b),
+                "format_a": fmt_a,
+                "format_b": fmt_b,
+                "identical": True,
+                "diff": "",
+                "stats": {"additions": 0, "deletions": 0, "changes": 0},
+            }
+
+        lines_a = norm_a.splitlines(keepends=True)
+        lines_b = norm_b.splitlines(keepends=True)
+        diff_iter = difflib.unified_diff(
+            lines_a,
+            lines_b,
+            fromfile=resolved_a.workspace_uri,
+            tofile=resolved_b.workspace_uri,
+            n=context_lines,
+        )
+        diff_text = "".join(diff_iter)
+
+        additions = 0
+        deletions = 0
+        for raw_line in diff_text.splitlines():
+            if raw_line.startswith("+++") or raw_line.startswith("---"):
+                continue
+            if raw_line.startswith("+"):
+                additions += 1
+            elif raw_line.startswith("-"):
+                deletions += 1
+
+        return {
+            "path_a": summarize_resolved(resolved_a),
+            "path_b": summarize_resolved(resolved_b),
+            "format_a": fmt_a,
+            "format_b": fmt_b,
+            "identical": False,
+            "diff": diff_text,
+            "stats": {
+                "additions": additions,
+                "deletions": deletions,
+                "changes": additions + deletions,
+            },
+        }
+
+    def _read_for_diff(resolved) -> tuple[str, str]:  # type: ignore[no-untyped-def]
+        """Return ``(text, format_name)`` suitable for a unified diff.
+
+        For text-like formats we use the handler's ``read_text``. For
+        binary containers (DOCX/XLSX/PPTX/PDF) we fall back to
+        ``extract_for_search`` - the structured text view, lossy for
+        formatting but readable as a diff.
+        """
+        ctx.guard.ensure_within_size_limit(resolved.absolute)
+        handler = ctx.registry.for_path(resolved.absolute)
+        fmt = handler.name if handler is not None else "text"
+        if handler is None:
+            text, _enc, _eol = read_text_with_eol(
+                resolved.absolute, auto_detect=ctx.config.auto_detect_encoding
+            )
+            return text, fmt
+        try:
+            return handler.read_text(resolved.absolute), fmt
+        except UnsupportedFormatError:
+            # Binary containers route through the search-extracted view.
+            return handler.extract_for_search(resolved.absolute), fmt
 
 
 def _apply_unified_diff(original: str, diff_text: str) -> str:

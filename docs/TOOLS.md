@@ -2,7 +2,7 @@
 
 <a href="../README.md">Home</a> · <a href="USAGE.md">Usage</a> · <a href="CONFIG.md">Config</a> · <a href="ARCHITECTURE.md">Architecture</a>
 
-All 30 tools exposed by Dokumen-Pintar, listed alphabetically. Tools marked with `*` are only registered when `semantic_search.enabled = true` in config.
+All **62 tools** exposed by Dokumen-Pintar v1.1.0, organised by category. Tools marked with `*` are only registered when `semantic_search.enabled = true`.
 
 For usage examples and recipes, see [USAGE.md](USAGE.md).
 
@@ -10,522 +10,481 @@ For usage examples and recipes, see [USAGE.md](USAGE.md).
   <svg width="100%" height="2" xmlns="http://www.w3.org/2000/svg" role="presentation"><defs><linearGradient id="dt" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#1e3a5f" stop-opacity="0"/><stop offset=".5" stop-color="#1e3a5f"/><stop offset="1" stop-color="#1e3a5f" stop-opacity="0"/></linearGradient></defs><rect width="100%" height="2" fill="url(#dt)"/></svg>
 </p>
 
-## batch_delete
+## Table of contents
 
-**Module:** `tools/batch.py`
+- [Workspace](#workspace) (4)
+- [File CRUD](#file-crud) (5)
+- [Content](#content) (8)
+- [Structured access](#structured-access) (4)
+- [Metadata](#metadata) (5)
+- [Authoring](#authoring) (5)
+- [Sections](#sections) (2)
+- [Images](#images) (4)
+- [Templates](#templates) (4)
+- [TOC & Bibliography](#toc--bibliography) (3)
+- [Compare & Lint](#compare--lint) (3)
+- [Batch operations](#batch-operations) (4)
+- [Search](#search) (3)
+- [Versioning](#versioning) (5)
+- [Semantic *](#semantic) (3)
 
-Delete every file matching `glob` across all writable roots. Snapshots each file before deletion. Defaults to dry-run.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `glob` | `str` | required | Glob pattern matched against relative path and filename |
-| `dry_run` | `bool` | `true` | Preview without deleting; set `false` to apply |
-
-Returns `{ dry_run, count, files[] }` where each entry has `uri`, `absolute`, `size`.
-
----
-
-## batch_rename
-
-**Module:** `tools/batch.py`
-
-Rename files matching `glob` by applying a regex substitution to the filename. Dry-run by default.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `glob` | `str` | required | Glob to select files |
-| `pattern` | `str` | required | Python regex pattern matched against the filename |
-| `replacement` | `str` | required | Replacement string (supports backreferences) |
-| `dry_run` | `bool` | `true` | Preview plan without renaming |
-
-Returns `{ dry_run, count, plan[] }` (dry-run) or `{ dry_run, count, applied[] }`.
+🆕 marks v1.1.0 additions or behaviour changes.
 
 ---
 
-## batch_replace_content
+## Workspace
 
-**Module:** `tools/batch.py`
+### `workspace_list_roots`
 
-Find/replace text inside every text-like file matching `glob`. Snapshots each modified file. Dry-run by default.
+List every configured workspace root with name, absolute path, and writable flag. Use this first to discover what the agent may touch.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `glob` | `str` | required | Glob to select files |
-| `old` | `str` | required | Text or regex pattern to find |
-| `new` | `str` | required | Replacement text |
-| `regex` | `bool` | `false` | Treat `old` as Python regex |
-| `dry_run` | `bool` | `true` | Preview without writing |
-| `case_sensitive` | `bool` | `true` | Case-sensitive matching |
+Returns `{ roots: [{ name, path, writable }] }`.
 
-Returns `{ dry_run, count, files[] }` with replacement counts per file.
+### `workspace_stat`
 
----
+Rich metadata about a path: existence, type, size, mtime, detected format, workspace URI.
 
-## content_append
+### `workspace_tree`
 
-**Module:** `tools/content_crud.py`
+Recursive directory listing with optional filename glob filter and depth limit.
 
-Append text to the end of a text-like file. Snapshots before writing.
+### `workspace_diagnose` 🆕
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `content` | `str` | required | Text to append |
+Read-only health check across config, snapshot store, audit log, extract cache, semantic index, and per-root disk usage. Surfaces warnings for oversized stores, missing roots, stale caches.
 
-Returns `{ snapshot, new_size, ... }`.
+Returns `{ config, roots[], snapshot_store, audit_log, extract_cache, semantic_search, warnings[] }`.
 
 ---
 
-## content_delete_range
+## File CRUD
 
-**Module:** `tools/content_crud.py`
-
-Delete a range of lines (1-based, inclusive) from a text-like file. Snapshots before writing.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `start_line` | `int` | required | First line to delete (1-based) |
-| `end_line` | `int` | required | Last line to delete (1-based, inclusive) |
-
-Returns `{ snapshot, ... }`.
+| Tool | Description |
+|------|-------------|
+| `file_create` | Create a new file. `overwrite=true` snapshots and replaces. |
+| `file_delete` | Delete a file or directory (`recursive=true`). Snapshots first. |
+| `file_rename` | Rename within the same parent directory. |
+| `file_copy` | Copy a file or directory. |
+| `file_move` | Move or relocate across roots. |
 
 ---
 
-## content_insert
+## Content
 
-**Module:** `tools/content_crud.py`
+### `content_read`
 
-Insert text at a specific line number (1-based). Existing content from that line shifts down. Snapshots before writing.
+Read text. Optional line slicing keeps responses small. Works on text-like formats; DOCX/PDF/XLSX delegate to handler `read_text`.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `line_number` | `int` | required | Line to insert at (1-based) |
-| `content` | `str` | required | Text to insert; newline appended if missing |
+### `content_write`
 
-Returns `{ snapshot, ... }`.
+Replace the entire textual content of a file. Snapshot taken first.
 
----
+### `content_append`
 
-## content_patch
+Append to the end of a text file. v1.1.0 preserves the file's predominant line ending.
 
-**Module:** `tools/content_crud.py`
+### `content_insert`
 
-Apply a unified diff to a file. Headers (`---`, `+++`) are tolerated and ignored. Snapshots before writing.
+Insert text at `line_number` (1-based). Existing text shifts down.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `unified_diff` | `str` | required | Unified diff string |
+### `content_replace`
 
-Returns `{ snapshot, ... }`.
+Find/replace within text. `regex=true` enables Python regex. `count=-1` replaces all.
 
----
+### `content_delete_range`
 
-## content_read
+Delete lines in `[start_line, end_line]` (1-based, inclusive).
 
-**Module:** `tools/content_crud.py`
+### `content_patch`
 
-Read the textual content of a file. DOCX, PDF, and XLSX delegate to their handler's `read_text` view. Optional line slicing keeps responses small.
+Apply a unified diff to a file. Headers (`---`, `+++`) tolerated.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `start_line` | `int\|null` | `null` | First line to return (1-based) |
-| `end_line` | `int\|null` | `null` | Last line to return (1-based, inclusive) |
-| `encoding` | `str\|null` | `null` | Override encoding hint |
+### `content_diff` 🆕
 
-Returns `{ content, encoding, line_count, ... }`.
+Unified diff between any two files. Text formats diff raw content; DOCX/XLSX/PPTX/PDF diff via `extract_for_search` (lossy for formatting, useful for prose).
+
+| Param | Type | Default |
+|-------|------|---------|
+| `path_a` | `str` | required |
+| `path_b` | `str` | required |
+| `context_lines` | `int` | `3` |
+| `ignore_whitespace` | `bool` | `false` |
+
+Returns `{ identical, diff, stats: { additions, deletions, changes }, format_a, format_b }`.
 
 ---
 
-## content_replace
+## Structured access
 
-**Module:** `tools/content_crud.py`
+Format-aware get/set/delete. Expression syntax depends on format:
 
-Find/replace within a single file. Supports plain text or Python regex. Snapshots before writing.
+- **JSON / YAML / JSON5**: JSONPath (`$.config.items[2]`) — 🆕 list indices `$.array[N]` now supported
+- **XML / SVG**: XPath
+- **XLSX**: `cell:Sheet1!A1`, `range:Sheet1!A1:B10`, `sheet:Sheet1`
+- **DOCX**: `paragraph:N`, `paragraph_runs:N` 🆕, `table:N`, `table:N!A1` 🆕, `table:N!row:M` 🆕, `table:N!col:M` 🆕, `core_props`
+- **PPTX**: `slide:N`
+- **PDF**: `page:N`, `metadata`
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `old` | `str` | required | Text or regex to find |
-| `new` | `str` | required | Replacement text |
-| `count` | `int` | `-1` | Max replacements; `-1` means all |
-| `regex` | `bool` | `false` | Treat `old` as Python regex |
-
-Returns `{ replacements, snapshot, ... }`.
-
----
-
-## content_write
-
-**Module:** `tools/content_crud.py`
-
-Replace the entire content of a file. Snapshots the previous version first. For text-like formats; DOCX/PDF delegate to their handler's `write_text`.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `content` | `str` | required | New full content |
-| `encoding` | `str` | `"utf-8"` | Target encoding |
-
-Returns `{ snapshot, ... }`.
+| Tool | Description |
+|------|-------------|
+| `struct_get` | Format-aware read |
+| `struct_set` | Format-aware write. For DOCX `paragraph_runs:N`, value is `[{text, bold?, italic?, underline?}, ...]` — preserves inline formatting |
+| `struct_delete` | Format-aware delete (now supports list-index deletion) |
+| `struct_meta` | Format-aware metadata (delegates to `handler.read_meta`) |
 
 ---
 
-## file_copy
+## Metadata
 
-**Module:** `tools/file_crud.py`
-
-Copy a file or directory to a new path within the workspace.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `src` | `str` | required | Source path |
-| `dst` | `str` | required | Destination path |
-| `overwrite` | `bool` | `false` | Replace destination if it exists |
-
-Returns `{ src, dst }` summaries.
+| Tool | Description |
+|------|-------------|
+| `metadata_read` | Read all metadata (EXIF, OOXML core properties, PDF docinfo) |
+| `metadata_write` | Merge `updates` into the file's metadata. Snapshot pre+post |
+| `metadata_delete` | Delete specific keys. Equivalent to `metadata_write` with `null` values |
+| `metadata_strip` | Remove all writable metadata. Useful for privacy-sanitising |
+| `metadata_read_batch` 🆕 | Read metadata for every file matching `glob`. `fields` filter, `max_files` cap. Returns `{ count, files[], skipped[], skipped_summary }` |
 
 ---
 
-## file_create
+## Authoring
 
-**Module:** `tools/file_crud.py`
+### `validate_spec`
 
-Create a new file with optional initial content. Snapshots before overwriting an existing file.
+Validate a document JSON spec without writing. Returns `{ valid, normalized }` or `{ valid: false, error }`.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `content` | `str` | `""` | Initial file content |
-| `overwrite` | `bool` | `false` | Replace if file already exists |
+### `compose_docx`
 
-Returns `{ created, snapshot, ... }`.
+Render a JSON spec to `.docx`. Block types: heading, paragraph, list, table, image, page_break, code, math, hr, blockquote.
 
----
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required |
+| `spec` | `dict\|str` | required |
+| `overwrite` | `bool` | `false` |
+| `template` 🆕 | `str?` | `null` |
 
-## file_delete
+When `template` is provided, blocks are appended to a copy of that template — inherits styles, headers, footers, page setup.
 
-**Module:** `tools/file_crud.py`
+### `compose_pdf`
 
-Delete a file or directory. Snapshots the file before deletion. Requires `recursive=true` for directories.
+Same block schema as `compose_docx`, renders via reportlab.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `recursive` | `bool` | `false` | Required to delete a directory |
+### `compose_from_markdown`
 
-Returns `{ deleted, snapshot, ... }`.
+Convert Markdown source to `.docx` or `.pdf` (selected by extension or `format` arg).
 
----
+### `compose_to_markdown` 🆕
 
-## file_move
+Convert a DOCX to Markdown via mammoth + html2text. Tables, code blocks, lists, headings, links preserved.
 
-**Module:** `tools/file_crud.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `src` | `str` | required (`.docx`) |
+| `dst` | `str` | required (`.md`) |
+| `overwrite` | `bool` | `false` |
+| `extract_images` | `bool` | `true` |
+| `style_map` | `str` | `""` |
+| `body_width` | `int` | `0` |
 
-Move a file or directory across paths or roots within the workspace. Snapshots before moving.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `src` | `str` | required | Source path |
-| `dst` | `str` | required | Destination path |
-| `overwrite` | `bool` | `false` | Replace destination if it exists |
-
-Returns `{ src, dst }` summaries.
+When `extract_images=true`, embedded images write to `<dst_dir>/images/` and the markdown references them with relative paths.
 
 ---
 
-## file_rename
+## Sections
 
-**Module:** `tools/file_crud.py`
+### `section_extract` 🆕
 
-Rename a file or directory within the same parent directory. Snapshots before renaming.
+Carve a section out of a DOCX into a standalone file.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `src` | `str` | required | Current path |
-| `dst` | `str` | required | New path (must share same parent) |
+| Param | Type | Default |
+|-------|------|---------|
+| `src` | `str` | required (`.docx`) |
+| `dst` | `str` | required (`.docx`) |
+| `heading_pattern` | `str?` | one of |
+| `paragraph_range` | `[int, int]?` | one of |
+| `overwrite` | `bool` | `false` |
 
-Returns `{ src, dst }` summaries.
+`heading_pattern` extracts from matching heading inclusive to next equal/higher heading exclusive. `paragraph_range` extracts a 0-based slice. Provide exactly one.
 
----
+### `section_merge` 🆕
 
-## search_content
+Merge multiple DOCX files via `docxcompose`.
 
-**Module:** `tools/search.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `sources` | `str[]` | required (≥2) |
+| `dst` | `str` | required |
+| `preserve_styles` | `bool` | `false` |
+| `page_break_between` | `bool` | `true` |
+| `overwrite` | `bool` | `false` |
 
-Plain-text content search across the workspace. Files are read via their handler's `extract_for_search`, so DOCX, PDF, XLSX, etc. are all searchable.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | `str` | required | Search string or regex |
-| `glob` | `str\|null` | `null` | Filter by filename glob |
-| `root` | `str\|null` | `null` | Restrict to a named root |
-| `regex` | `bool` | `false` | Treat `query` as Python regex |
-| `case_sensitive` | `bool` | `false` | Case-sensitive matching |
-| `max_results` | `int` | `200` | Max match entries returned |
-| `max_files` | `int` | `5000` | Max files scanned |
-
-Returns `{ query, matches[], truncated }`. Each match has `uri`, `line`, `snippet`, `match`.
+First source becomes master (its styles/headers/footers/page setup win). With `preserve_styles=true`, conflicting style IDs are renamed (`MyStyle_1`).
 
 ---
 
-## search_filename
+## Images
 
-**Module:** `tools/search.py`
+Embedded image tools for DOCX/PPTX (read+write) and PDF (read-only).
 
-Search files by filename glob across the workspace or a specific root.
+### `image_list` 🆕
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `glob_pattern` | `str` | required | Glob matched against filename |
-| `root` | `str\|null` | `null` | Restrict to a named root |
-| `limit` | `int` | `200` | Max results |
+List embedded images. Returns `{ count, images: [{ index, internal_name, size, ext, page? }] }`. PDF entries also carry `page`.
 
-Returns `{ glob, count, matches[] }`. Each match has `uri`, `absolute`, `size`.
+### `image_extract` 🆕
 
----
+Extract one image to a destination file. Forces destination extension to match the source image's actual ext.
 
-## search_in_format
+### `image_extract_all` 🆕
 
-**Module:** `tools/search.py`
+Extract every image into a directory.
 
-Search inside files of a specific format only (e.g. only PDFs, only DOCX). Useful when you want to avoid scanning unrelated file types.
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required |
+| `dst_dir` | `str` | required |
+| `naming_pattern` | `str` | `"image_{index:03d}{ext}"` |
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | `str` | required | Search string or regex |
-| `format` | `str` | required | Format name: `pdf`, `docx`, `xlsx`, `pptx`, `csv`, `xml`, `json`, `yaml`, `text` |
-| `glob` | `str\|null` | `null` | Additional filename filter |
-| `root` | `str\|null` | `null` | Restrict to a named root |
-| `regex` | `bool` | `false` | Treat `query` as Python regex |
-| `case_sensitive` | `bool` | `false` | Case-sensitive matching |
-| `max_results` | `int` | `200` | Max match entries returned |
+### `image_replace` 🆕
 
-Returns `{ matches[], truncated }`.
+Replace an embedded image at `index` with bytes from `src`. DOCX/PPTX only. Preserves `internal_name` so existing references keep working.
 
 ---
 
-## search_semantic *
+## Templates
 
-**Module:** `tools/search.py` (requires `semantic_search.enabled = true`)
+Jinja2-style DOCX templating via `docxtpl`. Built-in registry under `templates/<category>/<name>/`. v1.1.0 ships with `academic_id/kp_basic`.
 
-Semantic vector search using sentence-transformers. Documents must be indexed first via `semantic_index_path`.
+### `template_render` 🆕
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `query` | `str` | required | Natural language query |
-| `top_k` | `int` | `10` | Number of results to return |
+Render an arbitrary DOCX template path.
 
-Returns `{ query, hits[] }`.
+| Param | Type | Default |
+|-------|------|---------|
+| `template` | `str` | required (`.docx`) |
+| `dst` | `str` | required (`.docx`) |
+| `vars` | `dict?` | `null` |
+| `loops` | `dict?` | `null` |
+| `conditionals` | `dict?` | `null` |
+| `inline_images` | `dict?` | `null` |
+| `overwrite` | `bool` | `false` |
 
----
+`inline_images={var: 'kp:/img.png'}` injects a path. `{var: {path: ..., width_mm: 60}}` sizes it.
 
-## semantic_index_path *
+### `template_list` 🆕
 
-**Module:** `tools/search.py` (requires `semantic_search.enabled = true`)
+List built-in templates. Optional `category` filter. Returns `{ count, templates: [{ id, category, name, template_path, manifest? }] }`.
 
-Index a single file's extracted text into the semantic store.
+### `template_install` 🆕
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
+Copy a built-in template into the workspace by `template_id` (`category/name`).
 
-Returns `{ path, chunks }`.
+### `template_render_named` 🆕
 
----
-
-## semantic_stats *
-
-**Module:** `tools/search.py` (requires `semantic_search.enabled = true`)
-
-Return statistics for the semantic index (chunk count, document count).
-
-No parameters.
-
-Returns `{ ... }` (stats dict from the index).
+Render a built-in template directly without copying. Same vars/loops/conditionals/inline_images shape as `template_render`.
 
 ---
 
-## struct_delete
+## TOC & Bibliography
 
-**Module:** `tools/structured.py`
+### `toc_generate` 🆕
 
-Format-aware delete of a structural element (paragraph, row, sheet, slide, JSON key, XML attribute). Snapshots before mutating.
+Generate a static table of contents from heading paragraphs.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `expr` | `str` | required | Format-specific selector (see `struct_get`) |
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required (`.docx`) |
+| `insert_at` | `str?` | `null` (top of body) |
+| `style` | `str` | `"dotted_leader"` |
+| `max_depth` | `int` | `3` |
+| `exclude_patterns` | `str[]?` | `null` |
+| `page_numbers` | `bool` | `false` |
 
-Returns `{ snapshot, ... }`.
+`insert_at` accepts `paragraph:N` or `after:HEADING_TEXT`. Style is `dotted_leader` or `indented`.
 
----
+### `bibliography_check` 🆕
 
-## struct_get
+Validate citations against the bibliography section. Detects missing entries (cited but not listed), unused entries (listed but never cited), duplicates, and style mismatches (APA / IEEE).
 
-**Module:** `tools/structured.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required (`.docx`) |
+| `style` | `str` | `"APA"` |
+| `auto_detect_section` | `bool` | `true` |
+| `bib_section_pattern` | `str?` | `null` |
 
-Format-aware read using the file's handler. Expression syntax depends on format:
+Returns `{ citations_found, bibliography_entries, issues[] }`.
 
-- JSON / YAML: JSONPath (e.g. `$.store.book[0].title`)
-- XML: XPath (e.g. `//item/@id`)
-- XLSX: `cell:Sheet1!A1`
-- DOCX: `paragraph:3`
-- PPTX: `slide:0`
-- PDF: `page:0`
-- Any: `metadata`
+### `bibliography_format` 🆕
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `expr` | `str` | required | Format-specific selector |
-
-Returns `{ handler, expr, result, ... }`.
+Reformat the bibliography section. `sort=true` (default) sorts alphabetically. `auto_fix=false` (default) reports without writing; `auto_fix=true` applies + snapshots.
 
 ---
 
-## struct_meta
+## Compare & Lint
 
-**Module:** `tools/structured.py`
+### `document_compare` 🆕
 
-Read format-aware metadata for a file (delegates to `handler.read_meta`).
+Generate a comparison DOCX from two documents.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
+| Param | Type | Default |
+|-------|------|---------|
+| `src_a` | `str` | required |
+| `src_b` | `str` | required |
+| `dst` | `str` | required (`.docx`) |
+| `style` | `str` | `"track_changes"` |
+| `overwrite` | `bool` | `false` |
 
-Returns `{ handler, meta, ... }`.
+Styles:
+- `track_changes` — inline `[+ inserted +]` / `[- deleted -]` markers
+- `side_by_side` — two-column table, A on the left, B on the right
+- `diff_doc` — colored unified diff
 
----
+### `document_lint` 🆕
 
-## struct_set
+Run quality checks against a DOCX. `rules` accepts a preset name or list of rule IDs / preset names.
 
-**Module:** `tools/structured.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required (`.docx`) |
+| `rules` | `str\|str[]` | `"default"` |
+| `severity_filter` | `str?` | `null` |
 
-Format-aware write to a structural element. Snapshots before mutating. See `struct_get` for expression syntax per format.
+**Built-in presets:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `expr` | `str` | required | Format-specific selector |
-| `value` | `any` | required | New value to write |
+| Preset | Extends | Rules added |
+|--------|---------|-------------|
+| `default` | — | trailing_whitespace, empty_heading, duplicate_heading, heading_hierarchy_skip |
+| `academic_id` | default | title_case_id |
+| `academic_id_kp` | academic_id | required_section_lembar_pengesahan, kata_pengantar, daftar_isi, pendahuluan, daftar_pustaka, lampiran, log_book |
+| `academic_id_skripsi` | academic_id | abstrak, daftar_gambar/tabel, tinjauan_pustaka, metodologi, hasil_pembahasan, kesimpulan_saran, plus full KP set |
 
-Returns `{ snapshot, ... }`.
+Returns `{ rules_evaluated, issues[], summary: { errors, warnings, info, auto_fixable } }`.
 
----
+### `document_lint_fix` 🆕
 
-## version_diff
+Apply auto-fixes for lint issues.
 
-**Module:** `tools/version.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `path` | `str` | required (`.docx`) |
+| `rules` | `str\|str[]` | `"default"` |
+| `dry_run` | `bool` | `true` |
+| `only_severities` | `str[]?` | `null` |
 
-Compute a unified diff between the current file and a specific snapshot. Text formats return a diff string; binary formats return a size/sha summary.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `version_id` | `int` | required | Snapshot ID from `version_list` |
-
-Returns `{ version, diff, ... }` or `{ version, binary: true, ... }`.
-
----
-
-## version_list
-
-**Module:** `tools/version.py`
-
-List the snapshot history for a file, newest first.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-
-Returns `{ count, versions[], ... }`.
+Pass `dry_run=false` to apply. `only_severities` restricts fixes to listed severities (`error`, `warn`, `info`).
 
 ---
 
-## version_purge
+## Batch operations
 
-**Module:** `tools/version.py`
+### `batch_rename`
 
-Delete snapshots older than `older_than_days`. Defaults to the configured `retention_days` if not specified.
+Rename files matching `glob` by regex `pattern` → `replacement`. Snapshots each modified file. `dry_run=true` by default.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `older_than_days` | `int\|null` | `null` | Age threshold; `null` uses config default |
+### `batch_replace_content`
 
-Returns `{ removed }`.
+Find/replace inside text-like files matching `glob`. `regex=false` and `case_sensitive=true` by default.
 
----
+### `batch_replace_structured`
 
-## version_restore
+Format-aware find/replace inside DOCX/XLSX/PPTX. Walks paragraphs, table cells, spreadsheet cells, slide text frames via the native writer (no raw bytes).
 
-**Module:** `tools/version.py`
+| Param | Type | Default |
+|-------|------|---------|
+| `glob` | `str` | required |
+| `old` | `str` | required |
+| `new` | `str` | required |
+| `regex` | `bool` | `false` |
+| `dry_run` | `bool` | `true` |
+| `case_sensitive` | `bool` | `true` |
+| `scope` 🆕 | `dict?` | `null` |
 
-Replace the current file with the contents of a specific snapshot. Snapshots the current state first.
+`scope` keys per format:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-| `version_id` | `int` | required | Snapshot ID from `version_list` |
+- **DOCX**: `headings_only`, `tables_only`, `paragraph_range`, `heading_section`, `exclude_styles`, `include_styles`
+- **XLSX**: `sheets`, `cell_range`
+- **PPTX**: `slides`
 
-Returns `{ restored_from, ... }`.
+### `batch_delete`
 
----
-
-## version_undo
-
-**Module:** `tools/version.py`
-
-Revert the file to its most recent snapshot (one step back). If the head snapshot matches the current state, reverts to the second-most-recent.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
-
-Returns `{ restored_from, ... }`.
+Delete files matching `glob`. Always snapshots before deletion. `dry_run=true` by default.
 
 ---
 
-## workspace_list_roots
+## Search
 
-**Module:** `tools/workspace.py`
+### `search_filename`
 
-List every configured workspace root with its absolute path and writable flag. Call this first to discover what the agent may access.
+Search files by filename glob across the workspace.
 
-No parameters.
+### `search_content`
 
-Returns `{ roots[], count }`. Each root has `name`, `path`, `writable`, `exists`.
+Plain-text content search across the workspace. Files read via handler `extract_for_search` (cached on `(mtime, size)` in v1.1.0).
+
+| Param | Type | Default |
+|-------|------|---------|
+| `query` | `str` | required |
+| `glob` | `str?` | `null` |
+| `root` | `str?` | `null` |
+| `regex` | `bool` | `false` |
+| `case_sensitive` | `bool` | `false` |
+| `max_results` | `int` | `200` |
+| `max_files` | `int` | `5000` |
+| `include_context` 🆕 | `bool` | `false` |
+| `language` 🆕 | `str?` | `null` |
+| `stem` 🆕 | `bool` | `false` |
+
+`include_context=true` adds DOCX `heading_path` + `paragraph_index` per hit. `language="id"` + `stem=true` enables Sastrawi-based Indonesian morphological matching (requires `[indonesian]` extra) — `mengatakan` matches `berkata`, `perkataan`, etc.
+
+### `search_in_format`
+
+Search inside a specific format (pdf, docx, xlsx, pptx, csv, xml, json, yaml, text). Useful when you only want to scan e.g. PDFs.
 
 ---
 
-## workspace_stat
+## Versioning
 
-**Module:** `tools/workspace.py`
+| Tool | Description |
+|------|-------------|
+| `version_list` | List the snapshot history for a file (newest first) |
+| `version_diff` | Unified diff between current file and a snapshot version |
+| `version_restore` | Replace the current file with a specific snapshot |
+| `version_undo` | Revert to the most recent snapshot |
+| `version_purge` | See below |
 
-Return rich metadata about a path: existence, type, size, mtime, detected format, and workspace URI.
+### `version_purge` 🆕 (changed semantics)
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path |
+| Param | Type | Default |
+|-------|------|---------|
+| `older_than_days` | `int?` | `null` |
 
-Returns `{ exists, is_dir, is_file, is_symlink, size, mtime, format, handler, uri, ... }`.
+- `None` → use `versioning.retention_days`
+- `0` → 🆕 explicitly purges ALL snapshots (was: silent no-op in v1.0.x)
+- `>0` → keep only snapshots from last N days
+- Negative values rejected with `ValueError`
 
 ---
 
-## workspace_tree
+## Semantic
 
-**Module:** `tools/workspace.py`
+### `search_semantic` *
 
-Recursive directory listing. Respects `exclude_patterns` from config. Hidden files (dot-prefixed) are skipped unless `include_hidden=true`.
+Vector semantic search via sentence-transformers. Requires `semantic_search.enabled = true` and the `[semantic]` extra.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `path` | `str` | required | Workspace URI or absolute path to a directory |
-| `depth` | `int` | `3` | Max recursion depth; `-1` for unlimited |
-| `glob` | `str\|null` | `null` | Filter files by filename glob |
-| `include_hidden` | `bool` | `false` | Include dot-prefixed files/dirs |
+### `semantic_index_path` *
 
-Returns `{ root, path, tree[] }`. Each node has `name`, `type`, `rel`, and optionally `children` (dirs) or `size`, `format` (files).
+Index or re-index a file/directory in the semantic store.
+
+### `semantic_stats` *
+
+Return current index stats (chunks, documents, model).
+
+---
+
+## See also
+
+- **[USAGE.md](USAGE.md)** — practical workflows and common recipes
+- **[CONFIG.md](CONFIG.md)** — full configuration reference
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — module structure and request flow
+- **[BENCHMARK.md](BENCHMARK.md)** — performance baselines
+- **[profiles/README.md](profiles/README.md)** — six pre-tuned configurations
+- **[../templates/academic_id/kp_basic/README.md](../templates/academic_id/kp_basic/README.md)** — bundled KP report template

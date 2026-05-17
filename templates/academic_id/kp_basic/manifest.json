@@ -1,0 +1,67 @@
+{
+  "name": "Laporan KP - Generic Indonesian",
+  "description": "Generic Indonesian Kerja Praktik (KP) report skeleton with cover, lembar pengesahan, kata pengantar, daftar isi, BAB I, BAB II, log book table, lampiran, and daftar pustaka. Suitable as a starting point for any Indonesian university - replace constants with your institution's specifics.",
+  "version": "1.0.0",
+  "language": "id",
+  "category": "academic_id",
+  "license": "MIT",
+  "variables": {
+    "judul": {
+      "type": "string",
+      "required": true,
+      "example": "Sistem Monitoring SAP"
+    },
+    "nama": {
+      "type": "string",
+      "required": true,
+      "example": "Firdaus Satrio Utomo"
+    },
+    "nim": {
+      "type": "string",
+      "required": true,
+      "example": "3337230039"
+    },
+    "jurusan": {
+      "type": "string",
+      "required": true,
+      "example": "Teknik Informatika"
+    },
+    "universitas": {
+      "type": "string",
+      "required": true,
+      "example": "Universitas Sultan Ageng Tirtayasa"
+    },
+    "tahun": {
+      "type": "string",
+      "required": true,
+      "example": "2026"
+    },
+    "tanggal_pengesahan": {
+      "type": "string",
+      "required": false,
+      "default": "(diisi penguji)",
+      "example": "1 Juni 2026"
+    },
+    "latar_belakang": {
+      "type": "string",
+      "required": false,
+      "default": "Latar belakang penelitian akan ditulis di sini."
+    },
+    "tujuan": {
+      "type": "string",
+      "required": false,
+      "default": "Tujuan utama dari kerja praktik ini adalah..."
+    },
+    "pelaksanaan": {
+      "type": "string",
+      "required": false,
+      "default": "Deskripsi kegiatan kerja praktik..."
+    },
+    "pustaka": {
+      "type": "string",
+      "required": false,
+      "default": "(belum diisi)"
+    }
+  },
+  "notes": "Log book table is shipped with a single header row. After rendering, add log entries by appending rows in Word, or use the structured tools (`struct_set` with `table:N!row:M`) to programmatically insert them."
+}

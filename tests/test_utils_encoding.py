@@ -103,3 +103,81 @@ def test_slow_detect_best_none() -> None:
     with patch("charset_normalizer.from_bytes", return_value=mock_result):
         result = _slow_detect(b"\x80\x81\x82", "fallback-enc")
     assert result == "fallback-enc"
+
+
+
+# ── v1.1.0 Bug 1.2: line ending preservation ──
+
+
+def test_detect_line_ending_crlf() -> None:
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    assert detect_line_ending(b"line1\r\nline2\r\nline3\r\n") == "\r\n"
+
+
+def test_detect_line_ending_lf() -> None:
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    assert detect_line_ending(b"line1\nline2\nline3\n") == "\n"
+
+
+def test_detect_line_ending_cr_only_classic_mac() -> None:
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    assert detect_line_ending(b"line1\rline2\rline3\r") == "\r"
+
+
+def test_detect_line_ending_no_terminators_uses_default() -> None:
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    assert detect_line_ending(b"single line no terminator") == "\n"
+    assert detect_line_ending(b"", default="\r\n") == "\r\n"
+
+
+def test_detect_line_ending_str_input_encoded() -> None:
+    """``str`` is UTF-8-encoded internally before counting bytes."""
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    assert detect_line_ending("a\r\nb\r\n") == "\r\n"
+
+
+def test_detect_line_ending_mixed_picks_majority() -> None:
+    from dokumen_pintar.utils.encoding import detect_line_ending
+
+    # 3 CRLF, 1 LF: CRLF wins.
+    assert detect_line_ending(b"a\r\nb\r\nc\r\nd\ne") == "\r\n"
+    # 1 CRLF, 3 LF: LF wins.
+    assert detect_line_ending(b"a\r\nb\nc\nd\ne") == "\n"
+
+
+def test_read_text_with_eol_crlf(tmp_path: Path) -> None:
+    """``read_text_with_eol`` returns the file's line ending."""
+    from dokumen_pintar.utils.encoding import read_text_with_eol
+
+    target = tmp_path / "win.txt"
+    target.write_bytes(b"line1\r\nline2\r\n")
+    text, enc, eol = read_text_with_eol(target)
+    assert text == "line1\r\nline2\r\n"
+    assert enc == "utf-8"
+    assert eol == "\r\n"
+
+
+def test_read_text_with_eol_lf(tmp_path: Path) -> None:
+    from dokumen_pintar.utils.encoding import read_text_with_eol
+
+    target = tmp_path / "unix.txt"
+    target.write_bytes(b"a\nb\nc\n")
+    _text, _enc, eol = read_text_with_eol(target)
+    assert eol == "\n"
+
+
+def test_read_text_with_eol_explicit_encoding(tmp_path: Path) -> None:
+    """Caller-supplied encoding bypasses auto-detection."""
+    from dokumen_pintar.utils.encoding import read_text_with_eol
+
+    target = tmp_path / "explicit.txt"
+    target.write_bytes("héllo\n".encode("latin-1"))
+    text, enc, eol = read_text_with_eol(target, encoding="latin-1", auto_detect=False)
+    assert text == "héllo\n"
+    assert enc == "latin-1"
+    assert eol == "\n"

@@ -12,7 +12,7 @@ Dokumentasi internal **Dokumen-Pintar**: bagaimana modul saling terhubung, alur 
 
 ## 1. Layered Architecture
 
-Dokumen-Pintar terdiri dari **6 layer** yang ketat satu arah (atas → bawah). Layer atas tidak boleh dilewati, layer bawah tidak tahu konsumernya.
+Dokumen-Pintar terdiri dari **7 layer** yang ketat satu arah (atas → bawah). Layer atas tidak boleh dilewati, layer bawah tidak tahu konsumernya.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -20,22 +20,29 @@ Dokumen-Pintar terdiri dari **6 layer** yang ketat satu arah (atas → bawah). L
 ├─────────────────────────────────────────────────────────────────┤
 │  L5  MCP Surface        FastMCP — schema, dispatch, JSON-RPC    │  ← server.py + tools/*
 ├─────────────────────────────────────────────────────────────────┤
-│  L4  Tools (30)         workspace · file · content · structured │  ← tools/*
+│  L4  Tools (62)         workspace · file · content · structured │  ← tools/*
 │                         · search · batch · version · semantic   │
+│                         · authoring · sections · images         │
+│                         · templates · toc · bibliography        │
+│                         · compare · lint · metadata             │
 ├─────────────────────────────────────────────────────────────────┤
 │  L3  Orchestration      AppContext (guard + registry +          │  ← context.py
-│                         versions + audit)                       │     tools/_common.py
+│                         versions + audit + extract_cache)       │     tools/_common.py
 ├─────────────────────────────────────────────────────────────────┤
 │  L2  Domain Services    PathGuard · VersionStore · AuditLogger  │  ← pathguard.py,
-│                         · HandlerRegistry · SemanticIndex       │     versioning.py,
-│                                                                 │     audit.py,
-│                                                                 │     handlers/base.py
+│                         · HandlerRegistry · ExtractCache        │     versioning.py,
+│                         · LintRegistry · SemanticIndex          │     audit.py,
+│                                                                 │     handlers/base.py,
+│                                                                 │     extract_cache.py,
+│                                                                 │     lint/base.py
 ├─────────────────────────────────────────────────────────────────┤
-│  L1  Format Handlers    9 handlers (text, json, yaml, csv, xml, │  ← handlers/*
-│                         docx, xlsx, pptx, pdf)                  │
+│  L1  Format Handlers    9 handlers (text, markdown, latex,      │  ← handlers/*
+│                         json/yaml, csv, xml, docx, xlsx, pptx,  │
+│                         pdf, image)                             │
 ├─────────────────────────────────────────────────────────────────┤
 │  L0  Foundation         config · errors · utils (encoding,      │  ← config.py, errors.py,
-│                         locks, mime, globbing)                  │     utils/*
+│                         locks, mime, globbing, walking,         │     utils/*
+│                         stemming_id)                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +62,7 @@ Konsekuensi: lo bisa swap transport (L6) tanpa sentuh tools, swap handler (L1) t
 ```
 src/dokumen_pintar/
 │
-├── __init__.py             Versi paket (1.0.0).
+├── __init__.py             Versi paket (1.1.0).
 ├── server.py               Entry point CLI. Parse args, load config,
 │                           build_server(), pilih transport, run.
 ├── config.py               Pydantic models: AppConfig, RootConfig,
@@ -64,9 +71,11 @@ src/dokumen_pintar/
 │                           find_config_file() & load_config().
 ├── context.py              AppContext dataclass + build_context().
 │                           Wires PathGuard, VersionStore, AuditLogger,
-│                           HandlerRegistry, dan trigger import handler.
-├── errors.py               Exception hierarchy:
-│                           DokumenPintarError
+│                           HandlerRegistry, ExtractCache, dan trigger
+│                           import handler.
+├── errors.py               Exception hierarchy with v1.1.0 hint/docs_url/
+│                           code support:
+│                           DokumenPintarError(message, *, hint, docs_url, code)
 │                             ├── ConfigError
 │                             ├── PathNotAllowedError
 │                             ├── RootNotWritableError
@@ -77,33 +86,76 @@ src/dokumen_pintar/
 │                             ├── ConcurrencyError
 │                             └── ValidationError
 ├── pathguard.py            PathGuard + ResolvedPath. Sandbox enforcement.
-├── versioning.py           VersionStore. SQLite index + COW snapshots.
+├── versioning.py           VersionStore. SQLite index + COW snapshots
+│                           + thread-local connection pool (v1.1.0).
 ├── audit.py                AuditLogger. JSONL append-only.
+├── extract_cache.py        ExtractCache. SQLite cache for extract_for_search
+│                           keyed on (mtime, size). New in v1.1.0.
 ├── cli.py                  dokumen-pintar-init bootstrap.
 │
 ├── handlers/
 │   ├── base.py             FormatHandler protocol, HandlerCapability flags,
 │   │                       HandlerRegistry, default_registry singleton.
-│   ├── text_handler.py     Plain text / Markdown / source code (33 ext).
+│   ├── text_handler.py     Plain text / source code (33 ext).
+│   ├── markdown_handler.py Markdown (.md, .markdown).
+│   ├── latex_handler.py    LaTeX (.tex).
 │   ├── json_yaml_handler.py JsonHandler + YamlHandler (ruamel round-trip).
 │   ├── csv_handler.py      CsvHandler dengan dialect detection.
 │   ├── xml_handler.py      XmlHandler dengan XPath (lxml, XXE-safe).
-│   ├── docx_handler.py     DocxHandler (python-docx).
-│   ├── xlsx_handler.py     XlsxHandler (openpyxl).
+│   ├── docx_handler.py     DocxHandler (python-docx). v1.1.0 adds
+│   │                       paragraph_runs:N + table:N!cell sub-expressions.
+│   ├── xlsx_handler.py     XlsxHandler (openpyxl, read_only=True hot path).
 │   ├── pptx_handler.py     PptxHandler (python-pptx).
-│   └── pdf_handler.py      PdfHandler (pdfplumber + pypdf + pikepdf).
+│   ├── pdf_handler.py      PdfHandler (pypdf primary + pdfplumber fallback).
+│   └── image_handler.py    ImageHandler (PIL + EXIF metadata via piexif).
+│
+├── lint/                   New in v1.1.0.
+│   ├── __init__.py         Re-exports + auto-registration of rules.py and
+│   │                       presets_id.py.
+│   ├── base.py             LintRule + Issue + default_registry. add_preset
+│   │                       supports `extends` chains with cycle detection.
+│   ├── rules.py            5 base rules (trailing_whitespace, empty_heading,
+│   │                       duplicate_heading, heading_hierarchy_skip,
+│   │                       title_case_id) + RequiredSectionRule generic.
+│   │                       Registers `default` preset.
+│   └── presets_id.py       13 required_section_* rules + 3 academic presets
+│                           (academic_id, academic_id_kp, academic_id_skripsi).
+│
+├── authoring/
+│   ├── spec.py             DocumentSpec dataclass + validate_spec.
+│   ├── markdown_to_spec.py Markdown → spec via markdown-it-py.
+│   ├── render_docx.py      Spec → DOCX (python-docx). v1.1.0 supports
+│   │                       `template=` parameter.
+│   ├── render_pdf.py       Spec → PDF (reportlab).
+│   └── render_markdown.py  DOCX → Markdown via mammoth + html2text.
+│                           New in v1.1.0.
 │
 ├── tools/
 │   ├── _common.py          resolve_for_read/write, handler_for, summarize_resolved.
-│   ├── workspace.py        3 tools: list_roots, stat, tree.
+│   ├── workspace.py        4 tools: list_roots, stat, tree, diagnose (1.1.0).
 │   ├── file_crud.py        5 tools: create, delete, rename, move, copy.
-│   ├── content_crud.py     7 tools: read, write, append, insert, replace,
-│   │                       delete_range, patch.
+│   ├── content_crud.py     8 tools: read, write, append, insert, replace,
+│   │                       delete_range, patch, diff (1.1.0).
 │   ├── structured.py       4 tools: get, set, delete, meta.
-│   ├── search.py           3 base tools (filename, content, in_format)
+│   ├── metadata.py         5 tools: read, write, delete, strip,
+│   │                       read_batch (1.1.0 via register_batch).
+│   ├── authoring.py        5 tools: validate_spec, compose_docx (template
+│   │                       support 1.1.0), compose_pdf, compose_from_markdown,
+│   │                       compose_to_markdown (1.1.0).
+│   ├── sections.py         2 tools: section_extract, section_merge (1.1.0).
+│   ├── images.py           4 tools: list, extract, extract_all, replace (1.1.0).
+│   ├── templates.py        4 tools: list, install, render, render_named (1.1.0).
+│   ├── toc.py              1 tool: toc_generate (1.1.0).
+│   ├── bibliography.py     2 tools: check, format (1.1.0).
+│   ├── compare.py          1 tool: document_compare (1.1.0).
+│   ├── lint.py             2 tools: document_lint, document_lint_fix (1.1.0).
+│   ├── search.py           3 base tools (filename, content with
+│   │                       include_context + Indonesian stemming, in_format)
 │   │                       + 3 opsional semantic tools.
 │   ├── batch.py            3 tools: rename, replace_content, delete (dry-run default).
-│   └── version.py          5 tools: list, diff, restore, undo, purge.
+│   ├── batch_structured.py 1 tool: replace_structured (1.1.0 scope dict).
+│   └── version.py          5 tools: list, diff, restore, undo,
+│                           purge (1.1.0 explicit purge-all on 0).
 │
 ├── semantic/
 │   ├── __init__.py
@@ -111,10 +163,22 @@ src/dokumen_pintar/
 │                           Lazy-loaded; tidak load model kalau enabled=false.
 │
 └── utils/
-    ├── encoding.py         detect_encoding (charset-normalizer), read_text, write_text.
+    ├── encoding.py         detect_encoding, detect_line_ending (1.1.0),
+    │                       read_text, read_text_with_eol (1.1.0), write_text.
     ├── globbing.py         compile_globs + any_match (handle leading-slash glob).
     ├── locks.py            file_lock context manager (filelock, per-path SHA1).
-    └── mime.py             detect_format by extension + magic bytes fallback.
+    ├── mime.py             detect_format by extension + magic bytes fallback.
+    ├── walking.py          iter_files: unified file walker (1.1.0). Supports
+    │                       glob expansion for `**/*` and writable_only filter.
+    └── stemming_id.py      Sastrawi wrapper with thread-safe stemmer cache.
+                            New in v1.1.0. Used by search_content language="id".
+
+templates/
+└── academic_id/
+    └── kp_basic/
+        ├── template.docx       Generic Indonesian KP report skeleton.
+        ├── manifest.json       Variables + license + version metadata.
+        └── README.md           Per-template usage + customisation guide.
 ```
 
 ---

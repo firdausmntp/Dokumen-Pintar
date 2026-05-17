@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from dokumen_pintar.config import AppConfig
 from dokumen_pintar.context import build_context
+from dokumen_pintar.errors import ValidationError
 from dokumen_pintar.tools import batch_structured
 
 
@@ -111,9 +112,7 @@ def test_apply_docx_paragraph_and_table(
     assert cell_text == "WORLD A"
 
 
-def test_dry_run_xlsx(
-    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
-) -> None:
+def test_dry_run_xlsx(make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]) -> None:
     docs_dir, _ = tmp_roots
     target = docs_dir / "data.xlsx"
     _make_xlsx(target, [["foo", "bar"], ["foobar", "qux"]])
@@ -127,18 +126,14 @@ def test_dry_run_xlsx(
     assert target.read_bytes() == original
 
 
-def test_apply_xlsx(
-    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
-) -> None:
+def test_apply_xlsx(make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]) -> None:
     import openpyxl
 
     docs_dir, _ = tmp_roots
     target = docs_dir / "data.xlsx"
     _make_xlsx(target, [["foo here", "bar"], ["another foo", "x"]])
     mcp, _ = _setup(make_config())
-    _tool(mcp, "batch_replace_structured")(
-        glob="*.xlsx", old="foo", new="FOO", dry_run=False
-    )
+    _tool(mcp, "batch_replace_structured")(glob="*.xlsx", old="foo", new="FOO", dry_run=False)
     wb = openpyxl.load_workbook(str(target))
     try:
         ws = wb.active
@@ -148,9 +143,7 @@ def test_apply_xlsx(
         wb.close()
 
 
-def test_apply_pptx(
-    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
-) -> None:
+def test_apply_pptx(make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]) -> None:
     from pptx import Presentation
 
     docs_dir, _ = tmp_roots
@@ -196,9 +189,7 @@ def test_no_match_returns_empty_plan(
     assert result["count"] == 0
 
 
-def test_regex_mode(
-    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
-) -> None:
+def test_regex_mode(make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]) -> None:
     from docx import Document
 
     docs_dir, _ = tmp_roots
@@ -241,9 +232,7 @@ def test_corrupt_docx_recorded_as_render_failed(
     target = docs_dir / "broken.docx"
     target.write_bytes(b"not a real docx")
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_structured")(
-        glob="*.docx", old="x", new="y", dry_run=False
-    )
+    result = _tool(mcp, "batch_replace_structured")(glob="*.docx", old="x", new="y", dry_run=False)
     assert result["count"] == 0
     reasons = {s["reason"] for s in result.get("skipped", [])}
     assert "render_failed" in reasons
@@ -264,11 +253,11 @@ def test_apply_failure_demoted_to_skipped(
     real_replace = batch_structured._replace_in_docx
     state = {"calls": 0}
 
-    def flaky(path, pattern, repl, *, apply: bool):  # type: ignore[no-untyped-def]
+    def flaky(path, pattern, repl, *, apply: bool, **kwargs):  # type: ignore[no-untyped-def]
         state["calls"] += 1
         if apply:
             raise RuntimeError("disk full")
-        return real_replace(path, pattern, repl, apply=apply)
+        return real_replace(path, pattern, repl, apply=apply, **kwargs)
 
     monkeypatch.setattr(batch_structured, "_replace_in_docx", flaky)
 
@@ -290,3 +279,297 @@ def test_glob_root_prefix_works(
         glob="documents:/*.docx", old="world", new="X", dry_run=True
     )
     assert result["count"] == 1
+
+
+# ── v1.1.0 B.4: scoped batch_replace_structured ──
+
+
+def test_batch_scope_docx_paragraph_range(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`paragraph_range` restricts the replace to body paragraphs in [start, end]."""
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "rng.docx"
+    _make_docx(target, ["alpha", "alpha", "alpha", "alpha"])
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/rng.docx",
+        old="alpha",
+        new="ALPHA",
+        scope={"paragraph_range": [1, 2]},
+        dry_run=True,
+    )
+    assert result["count"] == 1
+    locations = result["files"][0]["locations"]
+    indices = {loc["index"] for loc in locations if loc["kind"] == "paragraph"}
+    assert indices == {1, 2}
+
+
+def test_batch_scope_docx_headings_only(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`headings_only=True` skips body paragraphs and tables."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "h.docx"
+    doc = Document()
+    doc.add_paragraph("BAB I", style="Heading 1")
+    doc.add_paragraph("BAB body alpha")  # not a heading
+    doc.save(str(target))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/h.docx",
+        old="BAB",
+        new="CHAPTER",
+        scope={"headings_only": True},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    # Only the heading paragraph (index 0) is a hit.
+    assert {loc["index"] for loc in locs if loc["kind"] == "paragraph"} == {0}
+
+
+def test_batch_scope_docx_tables_only(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`tables_only=True` skips body paragraphs."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "t.docx"
+    doc = Document()
+    doc.add_paragraph("alpha in body")
+    tbl = doc.add_table(rows=1, cols=2)
+    tbl.cell(0, 0).text = "alpha in cell"
+    tbl.cell(0, 1).text = "more"
+    doc.save(str(target))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/t.docx",
+        old="alpha",
+        new="ALPHA",
+        scope={"tables_only": True},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    kinds = {loc["kind"] for loc in locs}
+    assert kinds == {"table_cell"}
+
+
+def test_batch_scope_docx_include_styles(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`include_styles` filters to paragraphs with matching style names."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "is.docx"
+    doc = Document()
+    doc.add_paragraph("alpha quote", style="Quote")
+    doc.add_paragraph("alpha normal")  # default Normal style
+    doc.save(str(target))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/is.docx",
+        old="alpha",
+        new="ALPHA",
+        scope={"include_styles": ["Quote"]},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    assert {loc["index"] for loc in locs} == {0}
+
+
+def test_batch_scope_docx_exclude_styles(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`exclude_styles` drops matching paragraphs."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "es.docx"
+    doc = Document()
+    doc.add_paragraph("alpha quote", style="Quote")
+    doc.add_paragraph("alpha normal")
+    doc.save(str(target))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/es.docx",
+        old="alpha",
+        new="ALPHA",
+        scope={"exclude_styles": ["Quote"]},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    # Only normal paragraph (index 1) survives.
+    assert {loc["index"] for loc in locs} == {1}
+
+
+def test_batch_scope_docx_heading_section(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`heading_section` restricts to paragraphs under a matching heading subtree."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "hs.docx"
+    doc = Document()
+    doc.add_paragraph("BAB I", style="Heading 1")
+    doc.add_paragraph("alpha in BAB I")
+    doc.add_paragraph("BAB II", style="Heading 1")
+    doc.add_paragraph("alpha in BAB II")
+    doc.save(str(target))
+    mcp, _ = _setup(make_config())
+    # Anchor with $ so 'BAB I' doesn't substring-match 'BAB II'.
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/hs.docx",
+        old="alpha",
+        new="A",
+        scope={"heading_section": r"^BAB I$"},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    # Only the alpha in BAB I subtree is a hit (paragraph index 1).
+    assert {loc["index"] for loc in locs if loc["kind"] == "paragraph"} == {1}
+
+
+def test_batch_scope_xlsx_sheets(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    import openpyxl
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "sh.xlsx"
+    wb = openpyxl.Workbook()
+    s1 = wb.active
+    s1.title = "Keep"
+    s1["A1"] = "alpha"
+    s2 = wb.create_sheet("Skip")
+    s2["A1"] = "alpha"
+    wb.save(target)
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/sh.xlsx",
+        old="alpha",
+        new="A",
+        scope={"sheets": ["Keep"]},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    sheets_seen = {loc["sheet"] for loc in locs}
+    assert sheets_seen == {"Keep"}
+
+
+def test_batch_scope_xlsx_cell_range(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    import openpyxl
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "rg.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "in range"
+    ws["B2"] = "in range"
+    ws["E5"] = "out of range"
+    ws["A10"] = "out of range"
+    wb.save(target)
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/rg.xlsx",
+        old="range",
+        new="RANGE",
+        scope={"cell_range": "A1:B2"},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    refs = {loc["ref"] for loc in locs}
+    assert refs == {"A1", "B2"}
+
+
+def test_batch_scope_xlsx_invalid_cell_range(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    import openpyxl
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "rgi.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "alpha"
+    wb.save(target)
+    mcp, _ = _setup(make_config())
+    with pytest.raises(ValidationError, match="invalid cell_range"):
+        _tool(mcp, "batch_replace_structured")(
+            glob="documents:/rgi.xlsx",
+            old="alpha",
+            new="A",
+            scope={"cell_range": "invalid_no_colon"},
+            dry_run=True,
+        )
+
+
+def test_batch_scope_pptx_slides(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    from pptx import Presentation
+
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "sl.pptx"
+    prs = Presentation()
+    for txt in ("on slide 0", "on slide 1", "on slide 2"):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        tb = slide.shapes.add_textbox(0, 0, 1000000, 500000)
+        tb.text_frame.text = f"alpha {txt}"
+    prs.save(str(target))
+    mcp, _ = _setup(make_config())
+    result = _tool(mcp, "batch_replace_structured")(
+        glob="documents:/sl.pptx",
+        old="alpha",
+        new="A",
+        scope={"slides": [0, 2]},
+        dry_run=True,
+    )
+    locs = result["files"][0]["locations"]
+    slides_hit = {loc["slide"] for loc in locs}
+    assert slides_hit == {0, 2}
+
+
+def test_batch_scope_unknown_keys_rejected(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "u.docx"
+    _make_docx(target, ["alpha"])
+    mcp, _ = _setup(make_config())
+    with pytest.raises(ValidationError, match="unsupported scope keys"):
+        _tool(mcp, "batch_replace_structured")(
+            glob="documents:/u.docx",
+            old="alpha",
+            new="A",
+            scope={"sheets": ["x"]},  # xlsx-only key on a docx
+        )
+
+
+def test_batch_scope_must_be_dict(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    docs_dir, _ = tmp_roots
+    target = docs_dir / "nd.docx"
+    _make_docx(target, ["alpha"])
+    mcp, _ = _setup(make_config())
+    with pytest.raises(ValidationError, match="scope must be a dict"):
+        _tool(mcp, "batch_replace_structured")(
+            glob="documents:/nd.docx",
+            old="alpha",
+            new="A",
+            scope=["bad"],  # not a dict
+        )
+
+
+def test_xlsx_cell_in_range_invalid_coord() -> None:
+    """The helper raises ValidationError on bad coordinate input."""
+    from dokumen_pintar.tools.batch_structured import _xlsx_cell_in_range
+
+    with pytest.raises(ValidationError):
+        _xlsx_cell_in_range("not-a-coord", "A1:B2")

@@ -25,3 +25,4 @@ dokumen-pintar.config.json
 dokumen_pintar-*/
 rawr/
 tests_e2e_rawr.py
+.sisyphus/

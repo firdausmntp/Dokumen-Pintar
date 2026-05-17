@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .audit import AuditLogger
 from .config import AppConfig
+from .extract_cache import ExtractCache
 from .handlers import HandlerRegistry
 from .pathguard import PathGuard
 from .versioning import VersionStore
@@ -19,6 +20,7 @@ class AppContext:
     versions: VersionStore
     audit: AuditLogger
     registry: HandlerRegistry
+    extract_cache: ExtractCache
 
     @property
     def roots(self):  # type: ignore[no-untyped-def]
@@ -52,6 +54,8 @@ def build_context(config: AppConfig) -> AppContext:
     audit_default = global_dir / "audit.jsonl"
     audit = AuditLogger(config, default_path=audit_default)
 
+    extract_cache = ExtractCache(global_dir / "extract_cache.sqlite")
+
     # Register built-in handlers lazily.
     from .handlers import text_handler  # noqa: F401 — side-effect
     from .handlers import json_yaml_handler  # noqa: F401
@@ -61,6 +65,7 @@ def build_context(config: AppConfig) -> AppContext:
     from .handlers import xlsx_handler  # noqa: F401
     from .handlers import pptx_handler  # noqa: F401
     from .handlers import pdf_handler  # noqa: F401
+
     # MarkdownHandler & LatexHandler register AFTER text_handler so they win
     # the .md / .markdown / .tex extension lookups (registry overwrites).
     from .handlers import markdown_handler  # noqa: F401
@@ -73,6 +78,7 @@ def build_context(config: AppConfig) -> AppContext:
         versions=versions,
         audit=audit,
         registry=default_registry,
+        extract_cache=extract_cache,
     )
 
     # Best-effort retention enforcement at startup. Without this the

@@ -109,7 +109,11 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
     @mcp.tool(
         name="version_purge",
         description=(
-            "Delete snapshots older than `older_than_days` (defaults to configured retention)."
+            "Delete snapshots from the version store. "
+            "older_than_days=None uses the configured retention. "
+            "older_than_days=0 explicitly purges ALL snapshots. "
+            "older_than_days>0 keeps only snapshots from the last N days. "
+            "Negative values are rejected."
         ),
     )
     def version_purge(older_than_days: int | None = None) -> dict[str, Any]:

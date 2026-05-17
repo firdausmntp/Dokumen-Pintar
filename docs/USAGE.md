@@ -522,3 +522,610 @@ The file is recreated at its original path from the snapshot bytes.
 ```
 
 `version_undo` picks the most recent snapshot automatically. No need to look up a version ID.
+
+
+---
+
+## v1.1.0 workflows
+
+The recipes below cover the new tools shipped in v1.1.0. They assume the same workspace URI conventions as the rest of this guide.
+
+### Diff two documents
+
+`content_diff` works on any two files. Text files diff their raw bytes; DOCX/XLSX/PPTX/PDF diff via the format's extracted text view.
+
+```json
+// input
+{
+  "path_a": "documents:/laporan_v1.docx",
+  "path_b": "documents:/laporan_v2.docx",
+  "context_lines": 5,
+  "ignore_whitespace": false
+}
+
+// output
+{
+  "identical": false,
+  "diff": "--- documents:/laporan_v1.docx\n+++ documents:/laporan_v2.docx\n@@ -3,6 +3,7 @@\n ...",
+  "stats": { "additions": 12, "deletions": 5, "changes": 17 },
+  "format_a": "docx",
+  "format_b": "docx"
+}
+```
+
+For a richer side-by-side or track-changes export, use [`document_compare`](#compare-two-docxs-with-track-changes-output).
+
+---
+
+### Bulk-read metadata across many files
+
+```json
+// input
+{ "glob": "documents:/papers/*.pdf" }
+
+// output
+{
+  "count": 12,
+  "files": [
+    { "uri": "documents:/papers/01.pdf", "format": "pdf", "meta": { "title": "...", "author": "..." } }
+  ],
+  "skipped": [
+    { "uri": "documents:/papers/note.txt", "reason": "no_handler" }
+  ]
+}
+```
+
+Pass `fields=["author", "title"]` to restrict the returned meta dict per file.
+
+---
+
+### Convert DOCX to Markdown
+
+`compose_to_markdown` round-trips DOCX → Markdown via mammoth + html2text. Tables, code blocks, lists, headings, links survive.
+
+```json
+// input
+{
+  "src": "documents:/laporan.docx",
+  "dst": "documents:/laporan.md",
+  "extract_images": true
+}
+
+// output
+{
+  "src": { "uri": "documents:/laporan.docx", ... },
+  "dst": { "uri": "documents:/laporan.md", ... },
+  "size": 18432,
+  "warnings": []
+}
+```
+
+When `extract_images=true` (default), embedded images write to `documents:/images/<uuid>.png` and the Markdown references them with relative paths. Set `extract_images=false` to inline images as base64 data URIs.
+
+---
+
+### Compose a DOCX from a template
+
+Use an existing DOCX as a layout shell — its styles, headers, footers, page setup, and any cover content are preserved; the generated body is appended.
+
+```json
+// input
+{
+  "path": "documents:/laporan_baru.docx",
+  "template": "templates:/cover_untirta.docx",
+  "spec": {
+    "blocks": [
+      { "type": "heading", "text": "BAB I PENDAHULUAN", "level": 1 },
+      { "type": "paragraph", "runs": [{ "text": "Latar belakang penelitian..." }] }
+    ]
+  }
+}
+```
+
+The template path is resolved through PathGuard like every other path argument.
+
+---
+
+### Extract a section out of a long DOCX
+
+Pull `BAB IV` (and everything beneath it, until the next `BAB`) into a standalone file:
+
+```json
+// input
+{
+  "src": "documents:/laporan_lengkap.docx",
+  "dst": "documents:/bab4_only.docx",
+  "heading_pattern": "^BAB IV"
+}
+
+// output
+{
+  "src": { ... },
+  "dst": { "uri": "documents:/bab4_only.docx" },
+  "elements_copied": 24,
+  "snapshot": { ... }
+}
+```
+
+For a paragraph-index slice instead of a heading match, pass `paragraph_range: [start, end]`. Provide exactly one of `heading_pattern` or `paragraph_range`.
+
+---
+
+### Merge multiple DOCX files
+
+```json
+// input
+{
+  "sources": [
+    "documents:/bab1.docx",
+    "documents:/bab2.docx",
+    "documents:/bab3.docx"
+  ],
+  "dst": "documents:/laporan_gabungan.docx",
+  "preserve_styles": false,
+  "page_break_between": true
+}
+```
+
+The first source becomes the master — its styles, headers, footers, and page setup win. With `preserve_styles=true`, conflicting style IDs from later sources are renamed (`MyStyle` → `MyStyle_1`) instead of being discarded.
+
+---
+
+### Extract embedded images
+
+```json
+// 1. discover what's in there
+{ "path": "documents:/laporan.docx" }
+
+// →
+{
+  "format": "docx",
+  "count": 4,
+  "images": [
+    { "index": 0, "internal_name": "word/media/image1.png", "size": 14820, "ext": ".png" },
+    ...
+  ]
+}
+
+// 2. dump them all
+{
+  "path": "documents:/laporan.docx",
+  "dst_dir": "documents:/images_out",
+  "naming_pattern": "fig_{index:02d}{ext}"
+}
+```
+
+Replace one in place (DOCX/PPTX only — PDF is read-only):
+
+```json
+{
+  "path": "documents:/laporan.docx",
+  "index": 0,
+  "src": "documents:/new_logo.png"
+}
+```
+
+The replacement keeps the original `internal_name`, so existing references inside the document continue to point at the new image.
+
+---
+
+### Render a Jinja-style DOCX template
+
+```json
+{
+  "template": "templates:/kp_uni.docx",
+  "dst": "documents:/laporan_firdaus.docx",
+  "vars": {
+    "judul": "Sistem Monitoring SAP",
+    "nama": "Firdaus Satrio Utomo",
+    "nim": "3337230039",
+    "jurusan": "Teknik Informatika",
+    "universitas": "Universitas Sultan Ageng Tirtayasa",
+    "tahun": "2026"
+  },
+  "loops": {
+    "entries": [
+      { "tanggal": "2 Mei 2026", "kegiatan": "Setup environment" },
+      { "tanggal": "3 Mei 2026", "kegiatan": "Implementasi API" }
+    ]
+  },
+  "conditionals": { "show_lampiran": true },
+  "inline_images": {
+    "logo": { "path": "documents:/logo.png", "width_mm": 30 }
+  }
+}
+```
+
+Template syntax follows [`docxtpl`](https://github.com/elapouya/python-docx-template):
+
+- `{{ variable }}` — substitution
+- `{% for x in xs %} ... {% endfor %}` — loop
+- `{% if cond %} ... {% endif %}` — conditional
+- `{%tr for x in xs %}` / `{%tr endfor %}` — repeat a table row
+
+For repeating cells / table fragments, use the `{% tr %}`, `{% tbl %}`, and `{% cell %}` macros provided by docxtpl.
+
+---
+
+### Use the bundled academic_id template
+
+The wheel ships with `academic_id/kp_basic` — a generic Indonesian KP report skeleton.
+
+```json
+// 1. browse the registry
+{ "category": "academic_id" }
+
+// →
+{
+  "count": 1,
+  "templates": [
+    { "id": "academic_id/kp_basic", "manifest": { "language": "id", "license": "MIT", ... } }
+  ]
+}
+
+// 2. render directly without copying
+{
+  "template_id": "academic_id/kp_basic",
+  "dst": "documents:/laporan_firdaus.docx",
+  "vars": {
+    "judul": "Sistem Monitoring SAP",
+    "nama": "Firdaus Satrio Utomo",
+    "nim": "3337230039",
+    "jurusan": "Teknik Informatika",
+    "universitas": "Universitas Sultan Ageng Tirtayasa",
+    "tahun": "2026"
+  }
+}
+
+// 3. or copy it for editing first
+{
+  "template_id": "academic_id/kp_basic",
+  "dst": "documents:/templates/my_kp.docx"
+}
+```
+
+---
+
+### Generate a static table of contents
+
+```json
+{
+  "path": "documents:/laporan.docx",
+  "insert_at": "after:DAFTAR ISI",
+  "style": "dotted_leader",
+  "max_depth": 3,
+  "exclude_patterns": ["DAFTAR ISI", "LAMPIRAN"]
+}
+```
+
+`insert_at` accepts:
+- `paragraph:N` — insert just after the Nth body paragraph
+- `after:HEADING_TEXT` — insert just after the first heading whose text contains `HEADING_TEXT`
+- omitted — insert at the top of the body
+
+---
+
+### Validate citations against bibliography
+
+```json
+// input
+{
+  "path": "documents:/laporan.docx",
+  "style": "APA"
+}
+
+// output
+{
+  "citations_found": [
+    { "kind": "author_year", "raw": "(Smith, 2020)", "key": "Smith 2020", "paragraph_index": 65 }
+  ],
+  "bibliography_entries": [
+    { "kind": "author_year", "key": "Smith 2020", "raw": "Smith, J. (2020). ..." }
+  ],
+  "issues": [
+    { "type": "unused_bib_entry", "key": "Jones 2019" },
+    { "type": "missing_bib_entry", "citation": "(Doe, 2021)", "key": "Doe 2021" }
+  ]
+}
+```
+
+Sort and reformat the bibliography section in place:
+
+```json
+{
+  "path": "documents:/laporan.docx",
+  "style": "APA",
+  "sort": true,
+  "auto_fix": true
+}
+```
+
+---
+
+### Compare two DOCXs with track-changes output
+
+```json
+{
+  "src_a": "documents:/laporan_v1.docx",
+  "src_b": "documents:/laporan_v2.docx",
+  "dst": "documents:/comparison.docx",
+  "style": "track_changes"
+}
+```
+
+Three output styles:
+- `track_changes` — inline `[+ inserted +]` / `[- deleted -]` markers (default)
+- `side_by_side` — two-column table, A on the left, B on the right
+- `diff_doc` — colored unified diff
+
+---
+
+### Lint a document
+
+```json
+// 1. run with the academic_id_kp preset
+{
+  "path": "documents:/laporan.docx",
+  "rules": "academic_id_kp"
+}
+
+// →
+{
+  "rules_evaluated": [
+    "trailing_whitespace", "empty_heading", "duplicate_heading",
+    "heading_hierarchy_skip", "title_case_id",
+    "required_section_lembar_pengesahan",
+    "required_section_kata_pengantar",
+    "required_section_daftar_isi",
+    "required_section_pendahuluan",
+    "required_section_daftar_pustaka",
+    "required_section_lampiran",
+    "required_section_log_book"
+  ],
+  "issues": [
+    {
+      "rule": "trailing_whitespace",
+      "severity": "warn",
+      "location": { "paragraph": 12 },
+      "current": "BAB I ",
+      "suggested": "BAB I",
+      "auto_fixable": true,
+      "message": "Paragraph has trailing whitespace"
+    },
+    {
+      "rule": "required_section_log_book",
+      "severity": "error",
+      "location": { "section": "LOG BOOK" },
+      "auto_fixable": false,
+      "message": "Required section not found: 'LOG BOOK'"
+    }
+  ],
+  "summary": { "errors": 1, "warnings": 1, "info": 0, "auto_fixable": 1 }
+}
+
+// 2. apply auto-fixes (dry-run first by default)
+{
+  "path": "documents:/laporan.docx",
+  "rules": "academic_id_kp"
+}
+
+// 3. confirm and write
+{
+  "path": "documents:/laporan.docx",
+  "rules": "academic_id_kp",
+  "dry_run": false
+}
+```
+
+**Built-in presets:**
+
+| Preset | Use case |
+|--------|----------|
+| `default` | Generic structure & whitespace checks |
+| `academic_id` | Indonesian academic paper standards |
+| `academic_id_kp` | Kerja Praktik report rules |
+| `academic_id_skripsi` | Undergraduate thesis rules |
+
+You can also pass a list of rule IDs / preset names:
+
+```json
+{ "rules": ["default", "title_case_id", "required_section_log_book"] }
+```
+
+---
+
+### Indonesian morphological search (Sastrawi)
+
+Stem the query and the document text before matching, so morphological variants collapse:
+
+```json
+{
+  "query": "mengatakan",
+  "language": "id",
+  "stem": true
+}
+```
+
+`mengatakan`, `berkata`, `perkataan`, `kata-kata` all stem to `kata`, so they all match.
+
+Requires the optional `[indonesian]` extra:
+
+```bash
+pip install dokumen-pintar[indonesian]
+```
+
+Acronyms (≤ 5 uppercase characters, e.g. `SAP`, `KP`) are preserved verbatim during stemming so they survive the round-trip.
+
+---
+
+### Workspace health check
+
+`workspace_diagnose` is read-only and free of side effects. Use it to spot oversized stores or stale caches:
+
+```json
+// input
+{}
+
+// output
+{
+  "config": { "max_file_size_mb": 100, "auto_detect_encoding": true, ... },
+  "roots": [
+    { "name": "documents", "path": "C:/...", "writable": true, "exists": true, "disk_usage_bytes": 248301552 }
+  ],
+  "snapshot_store": {
+    "enabled": true,
+    "storage_mode": "flexible",
+    "snapshot_count": 142,
+    "index_db_size_bytes": 524288
+  },
+  "audit_log": { "size_bytes": 4096, "entries": 87 },
+  "extract_cache": { "enabled": true, "size_bytes": 1048576 },
+  "warnings": []
+}
+```
+
+Warnings appear when:
+- Snapshot index DB > 100 MB → consider `version_purge`
+- Audit log > 50 MB → consider rotating
+- Extract cache > 200 MB → consider `extract_cache.clear()`
+- A configured root path doesn't exist on disk
+
+---
+
+### Search content with structural context
+
+`include_context=true` enriches DOCX hits with the heading breadcrumb the match lives under:
+
+```json
+// input
+{
+  "query": "integrasi sistem",
+  "glob": "*.docx",
+  "include_context": true
+}
+
+// output
+{
+  "matches": [
+    {
+      "uri": "documents:/laporan.docx",
+      "line": 65,
+      "snippet": "...integrasi sistem SAP ke aplikasi internal...",
+      "match": "integrasi sistem",
+      "context": {
+        "format": "docx",
+        "paragraph_index": 64,
+        "heading_path": "BAB II PEMBAHASAN > 2.1 Integrasi"
+      }
+    }
+  ]
+}
+```
+
+The breadcrumb walks every preceding heading in the document, popping deeper levels off as new top-level sections appear.
+
+---
+
+### Edit a paragraph while preserving formatting
+
+`paragraph_runs:N` reads and writes the paragraph as a list of structured runs. Use it instead of `paragraph:N` when you need to keep bold/italic/underline state intact:
+
+```json
+// 1. read
+{ "path": "documents:/laporan.docx", "expr": "paragraph_runs:42" }
+
+// →
+{
+  "index": 42,
+  "text": "Sistem ini menggunakan SAP yang terintegrasi.",
+  "runs": [
+    { "text": "Sistem ini menggunakan ", "bold": false, "italic": false, "underline": false },
+    { "text": "SAP", "bold": true, "italic": false, "underline": false },
+    { "text": " yang terintegrasi.", "bold": false, "italic": false, "underline": false }
+  ]
+}
+
+// 2. write replacements as runs
+{
+  "path": "documents:/laporan.docx",
+  "expr": "paragraph_runs:42",
+  "value": [
+    { "text": "Sistem ini memanfaatkan " },
+    { "text": "SAP", "bold": true },
+    { "text": " sebagai integrasi utamanya." }
+  ]
+}
+```
+
+---
+
+### Read a single cell from a DOCX table
+
+`table:N!A1` returns one cell. `table:N!row:M` returns a row, `table:N!col:M` a column:
+
+```json
+// cell B2
+{ "path": "documents:/laporan.docx", "expr": "table:0!B2" }
+// → "POST"
+
+// row 1
+{ "path": "documents:/laporan.docx", "expr": "table:0!row:1" }
+// → ["/api/sap", "POST", "Trigger sync"]
+
+// column 0
+{ "path": "documents:/laporan.docx", "expr": "table:0!col:0" }
+// → ["Endpoint", "/api/sap", "/api/log"]
+```
+
+---
+
+### Scoped find/replace inside a DOCX
+
+Restrict `batch_replace_structured` to a subsection:
+
+```json
+{
+  "glob": "documents:/laporan.docx",
+  "old": "kerjapraktik",
+  "new": "Kerja Praktik",
+  "scope": {
+    "headings_only": true
+  }
+}
+```
+
+DOCX scope keys:
+- `headings_only` — touch only paragraphs styled as headings
+- `tables_only` — touch only table cells
+- `paragraph_range` — `[start, end]` body paragraph slice
+- `heading_section` — restrict to paragraphs under a heading whose text matches the regex
+- `include_styles` / `exclude_styles` — filter by paragraph style name
+
+XLSX scope keys: `sheets`, `cell_range`. PPTX: `slides`.
+
+---
+
+### Purge old snapshots
+
+```json
+// keep only last 7 days
+{ "older_than_days": 7 }
+
+// purge ALL snapshots (v1.1.0 behaviour change — was a no-op in 1.0.x)
+{ "older_than_days": 0 }
+
+// use the configured retention setting
+{ }
+```
+
+Negative values are rejected with `ValueError`.
+
+---
+
+## See also
+
+- **[TOOLS.md](TOOLS.md)** — full parameter reference for every tool
+- **[CONFIG.md](CONFIG.md)** — configuration options
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — module map and request flow
+- **[BENCHMARK.md](BENCHMARK.md)** — performance baselines
+- **[profiles/README.md](profiles/README.md)** — six pre-tuned profiles for common scenarios

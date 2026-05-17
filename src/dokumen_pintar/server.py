@@ -77,9 +77,7 @@ def _apply_cli_roots(cfg: AppConfig, root_specs: list[str], read_only: bool) -> 
     return cfg
 
 
-def _load_or_synthesize_config(
-    config_path: str | None, root_specs: list[str]
-) -> AppConfig:
+def _load_or_synthesize_config(config_path: str | None, root_specs: list[str]) -> AppConfig:
     """Load config from disk; if absent and --root given, build a minimal config."""
     if config_path:
         return load_config(Path(config_path).resolve())
@@ -113,16 +111,24 @@ def _build_server(cfg: AppConfig) -> tuple[FastMCP, AppContext]:
         authoring,
         batch,
         batch_structured,
+        bibliography,
+        compare,
         content_crud,
         file_crud,
+        images,
+        lint,
         metadata,
         search,
+        sections,
         structured,
+        templates,
+        toc,
         version,
         workspace,
     )
 
     workspace.register(mcp, ctx)
+    workspace.register_diagnose(mcp, ctx)
     file_crud.register(mcp, ctx)
     content_crud.register(mcp, ctx)
     structured.register(mcp, ctx)
@@ -132,6 +138,14 @@ def _build_server(cfg: AppConfig) -> tuple[FastMCP, AppContext]:
     version.register(mcp, ctx)
     authoring.register(mcp, ctx)
     metadata.register(mcp, ctx)
+    metadata.register_batch(mcp, ctx)
+    images.register(mcp, ctx)
+    sections.register(mcp, ctx)
+    templates.register(mcp, ctx)
+    toc.register(mcp, ctx)
+    bibliography.register(mcp, ctx)
+    compare.register(mcp, ctx)
+    lint.register(mcp, ctx)
 
     return mcp, ctx
 

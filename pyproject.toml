@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dokumen-pintar"
-version = "1.0.2"
+version = "1.1.0"
 description = "MCP server universal untuk CRUD dokumen lintas format (text, JSON, YAML, CSV, XML, DOCX, XLSX, PPTX, PDF) dengan versioning, sandboxed multi-root, search, batch, dan semantic search opsional."
 readme = "README.pypi.md"
 requires-python = ">=3.10"
@@ -49,6 +49,11 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "sse-starlette>=2.1",
+    # v1.1.0 additions
+    "mammoth>=1.12",       # DOCX -> Markdown via mammoth + html2text
+    "html2text>=2024.2",   # HTML -> Markdown post-processor
+    "docxcompose>=2.1",    # section_merge with style/image preservation
+    "docxtpl>=0.20",       # Jinja2-style template_render
 ]
 
 [project.optional-dependencies]
@@ -57,11 +62,16 @@ semantic = [
     "numpy>=1.26",
     "scikit-learn>=1.5",
 ]
+indonesian = [
+    "Sastrawi>=1.0.1",  # Indonesian morphological stemmer
+]
 dev = [
     "pytest>=8.2",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.5",
     "mypy>=1.10",
+    "Sastrawi>=1.0.1",  # required by tests/test_tools_search.py stemming cases
 ]
 
 [project.urls]
@@ -80,6 +90,17 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "dokumen_pintar" = ["py.typed"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.data-files]
+# Ship the bundled academic_id template registry alongside the wheel.
+"share/dokumen-pintar/templates/academic_id/kp_basic" = [
+    "templates/academic_id/kp_basic/template.docx",
+    "templates/academic_id/kp_basic/manifest.json",
+    "templates/academic_id/kp_basic/README.md",
+]
 
 [tool.ruff]
 line-length = 100

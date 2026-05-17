@@ -181,35 +181,45 @@ class PdfHandler:
         raise UnsupportedFormatError("pdf does not support write_text; use PDF-specific tools")
 
     def extract_for_search(self, path: Path) -> str:
-        """Best-effort text extraction. Returns "" on total failure."""
-        # Primary: pdfplumber per-page with individual try/except.
-        parts: list[str] = []
-        try:
-            with pdfplumber.open(str(path)) as pdf:
-                for page in pdf.pages:
-                    try:
-                        parts.append(page.extract_text() or "")
-                    except Exception:
-                        continue
-            if any(parts):  # pragma: no branch
-                return "\n\n".join(parts)
-        except Exception:
-            pass
+        """Best-effort text extraction. Returns "" on total failure.
 
-        # Fallback: pypdf per-page.
-        fallback: list[str] = []
+        Strategy: try pypdf first (5-10x faster than pdfplumber for plain text);
+        fall back to pdfplumber only if pypdf yielded no usable text. This
+        flips the v1.0.2 order based on the observation that pypdf handles
+        the vast majority of search workloads adequately while costing a
+        fraction of the parser time.
+        """
+        # Primary: pypdf per-page (fast).
+        primary: list[str] = []
         try:
             reader = pypdf.PdfReader(str(path))
             if reader.is_encrypted:
                 try:
-                    reader.decrypt("")
+                    ok = reader.decrypt("")
                 except Exception:
+                    ok = 0
+                if not ok:
                     return ""
             for page in reader.pages:
                 try:
-                    fallback.append(page.extract_text() or "")
+                    primary.append(page.extract_text() or "")
                 except Exception:
                     continue
+            if any(p.strip() for p in primary):
+                return "\n\n".join(primary)
+        except Exception:
+            pass
+
+        # Fallback: pdfplumber per-page (slower, but better at certain
+        # weird PDFs - tagged content streams, unusual font encodings).
+        fallback: list[str] = []
+        try:
+            with pdfplumber.open(str(path)) as pdf:
+                for page in pdf.pages:
+                    try:
+                        fallback.append(page.extract_text() or "")
+                    except Exception:
+                        continue
             return "\n\n".join(fallback)
         except Exception:
             return ""
@@ -373,7 +383,6 @@ class PdfHandler:
             f"unsupported structured_delete expression '{expr}' (expected 'page:<n>' or 'metadata')"
         )
 
-
     # ----------------------------------------------------- write metadata
     _WRITABLE_KEYS: tuple[str, ...] = (
         "title",
@@ -395,8 +404,7 @@ class PdfHandler:
         for key in updates:
             if key not in self._WRITABLE_KEYS:
                 raise HandlerError(
-                    f"unknown PDF metadata key: {key!r} "
-                    f"(allowed: {list(self._WRITABLE_KEYS)})"
+                    f"unknown PDF metadata key: {key!r} (allowed: {list(self._WRITABLE_KEYS)})"
                 )
         key_map = {
             "title": "/Title",

@@ -77,6 +77,60 @@ def _parse_index_expr(expr: str, prefix: str) -> int:
         raise HandlerError(f"invalid index in expression: {expr!r}") from exc
 
 
+def _parse_table_subexpr(rest: str, ncols: int, nrows: int) -> tuple[str, int, int]:
+    """Parse a table sub-expression like ``A1`` or ``row:2`` or ``col:3``.
+
+    Returns ``(kind, row, col)``:
+
+    * ``kind == "cell"`` → both row & col valid
+    * ``kind == "row"``  → row valid, col == -1
+    * ``kind == "col"``  → col valid, row == -1
+
+    Raises :class:`HandlerError` for malformed input or out-of-range
+    indices. ``A1`` notation is 1-based for rows and ``A``-based for
+    columns to match spreadsheet conventions; ``row:N`` / ``col:N``
+    use 0-based indices to stay consistent with the rest of the docx
+    handler API.
+    """
+    sub = rest.strip()
+    if not sub:
+        raise HandlerError("empty table sub-expression")
+
+    if sub.startswith("row:"):
+        row = _parse_index_expr(sub, "row:")
+        if not 0 <= row < nrows:
+            raise HandlerError(f"row index {row} out of range (0..{nrows - 1})")
+        return ("row", row, -1)
+
+    if sub.startswith("col:"):
+        col = _parse_index_expr(sub, "col:")
+        if not 0 <= col < ncols:
+            raise HandlerError(f"col index {col} out of range (0..{ncols - 1})")
+        return ("col", -1, col)
+
+    # Spreadsheet-style A1 notation: letters then digits.
+    import re as _re
+
+    match = _re.fullmatch(r"([A-Za-z]+)(\d+)", sub)
+    if match:
+        col_letters = match.group(1).upper()
+        col = 0
+        for ch in col_letters:
+            col = col * 26 + (ord(ch) - ord("A") + 1)
+        col -= 1  # convert to 0-based
+        row = int(match.group(2)) - 1  # 1-based -> 0-based
+        if not 0 <= col < ncols:
+            raise HandlerError(f"cell column {col_letters!r} out of range (max col={ncols})")
+        if not 0 <= row < nrows:
+            raise HandlerError(f"cell row {row + 1} out of range (1..{nrows})")
+        return ("cell", row, col)
+
+    raise HandlerError(
+        f"unrecognised table sub-expression {sub!r} "
+        "(expected A1-style cell, 'row:<n>', or 'col:<n>')"
+    )
+
+
 class DocxHandler:
     """Handler for Microsoft Word `.docx` files via python-docx."""
 
@@ -182,18 +236,61 @@ class DocxHandler:
                 "style": getattr(getattr(p, "style", None), "name", None),
             }
 
+        if key.startswith("paragraph_runs:"):
+            idx = _parse_index_expr(key, "paragraph_runs:")
+            paragraphs = doc.paragraphs
+            if idx < 0 or idx >= len(paragraphs):
+                raise HandlerError(f"paragraph index out of range: {idx}")
+            p = paragraphs[idx]
+            runs_out: list[dict[str, Any]] = []
+            for r in p.runs:
+                runs_out.append(
+                    {
+                        "text": r.text,
+                        "bold": bool(r.bold) if r.bold is not None else False,
+                        "italic": bool(r.italic) if r.italic is not None else False,
+                        "underline": bool(r.underline) if r.underline is not None else False,
+                    }
+                )
+            return {
+                "index": idx,
+                "text": p.text,
+                "style": getattr(getattr(p, "style", None), "name", None),
+                "runs": runs_out,
+            }
+
         if key == "tables":
             return [
                 [[cell.text for cell in row.cells] for row in table.rows] for table in doc.tables
             ]
 
         if key.startswith("table:"):
-            idx = _parse_index_expr(key, "table:")
+            # Allow ``table:N!sub`` for cell / row / column slicing inside
+            # the table. Bare ``table:N`` keeps the original semantics
+            # (full 2D rows-of-cells).
+            spec = key[len("table:") :]
+            sub: str | None = None
+            if "!" in spec:
+                idx_str, sub = spec.split("!", 1)
+                idx = _parse_index_expr(f"table:{idx_str}", "table:")
+            else:
+                idx = _parse_index_expr(key, "table:")
             tables = doc.tables
             if idx < 0 or idx >= len(tables):
                 raise HandlerError(f"table index out of range: {idx}")
             table = tables[idx]
-            return [[cell.text for cell in row.cells] for row in table.rows]
+            rows = [[cell.text for cell in row.cells] for row in table.rows]
+            if sub is None:
+                return rows
+            ncols = len(rows[0]) if rows else 0
+            nrows = len(rows)
+            kind, r, c = _parse_table_subexpr(sub, ncols=ncols, nrows=nrows)
+            if kind == "cell":
+                return rows[r][c]
+            if kind == "row":
+                return rows[r]
+            # kind == "col"
+            return [row[c] if c < len(row) else "" for row in rows]
 
         if key == "headings":
             return _collect_headings(doc)
@@ -228,6 +325,39 @@ class DocxHandler:
                     p.style = doc.styles[style]
                 except KeyError as exc:
                     raise HandlerError(f"unknown style: {style!r}") from exc
+        elif key.startswith("paragraph_runs:"):
+            idx = _parse_index_expr(key, "paragraph_runs:")
+            paragraphs = doc.paragraphs
+            if idx < 0 or idx >= len(paragraphs):
+                raise HandlerError(f"paragraph index out of range: {idx}")
+            if not isinstance(value, list):
+                raise HandlerError(
+                    "paragraph_runs value must be a list of run dicts "
+                    "({text, bold?, italic?, underline?})"
+                )
+            p = paragraphs[idx]
+            # Drop existing runs, then rebuild from `value`.
+            for run in list(p.runs):
+                run.text = ""
+            # python-docx keeps the empty runs around. Remove them at the
+            # XML level so we don't leak invisible style markers.
+            for run in list(p.runs):
+                run._element.getparent().remove(run._element)
+            for r_idx, run_spec in enumerate(value):
+                if not isinstance(run_spec, dict):
+                    raise HandlerError(
+                        f"paragraph_runs[{r_idx}] must be a dict, got {type(run_spec).__name__}"
+                    )
+                text = run_spec.get("text", "")
+                if not isinstance(text, str):
+                    raise HandlerError(f"paragraph_runs[{r_idx}].text must be a string")
+                new_run = p.add_run(text)
+                if run_spec.get("bold"):
+                    new_run.bold = True
+                if run_spec.get("italic"):
+                    new_run.italic = True
+                if run_spec.get("underline"):
+                    new_run.underline = True
         elif key == "core_props":
             if not isinstance(value, dict):
                 raise HandlerError("core_props value must be a dict")
@@ -279,7 +409,6 @@ class DocxHandler:
         except Exception as exc:  # noqa: BLE001
             raise HandlerError(f"failed to save docx: {path} ({exc})") from exc
 
-
     # ---------- metadata write ----------
 
     _WRITABLE_CORE_PROPS: tuple[str, ...] = (
@@ -312,15 +441,12 @@ class DocxHandler:
         for key, value in updates.items():
             if key not in self._WRITABLE_CORE_PROPS:
                 raise HandlerError(
-                    f"unknown core property: {key!r} "
-                    f"(allowed: {list(self._WRITABLE_CORE_PROPS)})"
+                    f"unknown core property: {key!r} (allowed: {list(self._WRITABLE_CORE_PROPS)})"
                 )
             try:
                 setattr(cp, key, value)
             except (AttributeError, TypeError, ValueError) as exc:
-                raise HandlerError(
-                    f"failed to set core property {key!r}: {exc}"
-                ) from exc
+                raise HandlerError(f"failed to set core property {key!r}: {exc}") from exc
             applied[key] = value
         try:
             doc.save(str(path))

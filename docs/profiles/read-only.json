@@ -1,0 +1,23 @@
+{
+  "$schema": "../config.schema.json",
+  "_profile": "read-only",
+  "_description": "Browse-only access to a reference library. Safe for shared lookups; no mutations possible. Pair with `dokumen-pintar --read-only` if you want to enforce it at the CLI too.",
+  "roots": [
+    { "name": "library",   "path": "/path/to/library",   "writable": false },
+    { "name": "archive",   "path": "/path/to/archive",   "writable": false }
+  ],
+  "exclude_patterns": [
+    "**/.git/**",
+    "**/.venv/**",
+    "**/.mcpdocs/**"
+  ],
+  "max_file_size_mb": 200,
+  "versioning": { "enabled": false },
+  "audit": { "enabled": true, "log_path": null },
+  "transport": { "stdio": true, "http": { "enabled": false } },
+  "safety": {
+    "allow_sensitive": false,
+    "follow_symlinks": false,
+    "validate_roundtrip_writes": false
+  }
+}

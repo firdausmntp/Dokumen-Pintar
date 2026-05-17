@@ -1,0 +1,41 @@
+{
+  "$schema": "../config.schema.json",
+  "_profile": "research",
+  "_description": "Heavy document workloads - thesis, papers, reports. Optimized for big PDFs, long retention, and semantic search across the whole library.",
+  "roots": [
+    { "name": "papers",     "path": "~/Documents/Papers",     "writable": true },
+    { "name": "thesis",     "path": "~/Documents/Thesis",     "writable": true },
+    { "name": "references", "path": "~/Documents/References", "writable": false }
+  ],
+  "exclude_patterns": [
+    "**/.git/**",
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.mcpdocs/**",
+    "**/.DS_Store",
+    "**/*.aux",
+    "**/*.log",
+    "**/*.bbl",
+    "**/*.synctex.gz"
+  ],
+  "max_file_size_mb": 250,
+  "versioning": {
+    "enabled": true,
+    "storage_mode": "per_root",
+    "retention_days": 180,
+    "max_versions_per_file": 100
+  },
+  "audit": { "enabled": true, "log_path": null },
+  "semantic_search": {
+    "enabled": true,
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "auto_index_globs": ["**/*.pdf", "**/*.md", "**/*.txt", "**/*.docx"],
+    "chunk_size": 512,
+    "chunk_overlap": 96
+  },
+  "safety": {
+    "allow_sensitive": false,
+    "follow_symlinks": true,
+    "validate_roundtrip_writes": true
+  }
+}

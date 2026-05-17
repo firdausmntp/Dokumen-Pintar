@@ -1,0 +1,30 @@
+{
+  "$schema": "../config.schema.json",
+  "_profile": "personal",
+  "_description": "Daily personal workspace - documents + projects with versioning + audit trail. Recommended starting point for individual users on a desktop.",
+  "roots": [
+    { "name": "documents", "path": "~/Documents", "writable": true },
+    { "name": "projects",  "path": "~/Projects",  "writable": true },
+    { "name": "downloads", "path": "~/Downloads", "writable": false }
+  ],
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.mcpdocs/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/.cache/**"
+  ],
+  "max_file_size_mb": 50,
+  "versioning": {
+    "enabled": true,
+    "storage_mode": "flexible",
+    "retention_days": 30,
+    "max_versions_per_file": 20
+  },
+  "audit": { "enabled": true, "log_path": null },
+  "transport": { "stdio": true, "http": { "enabled": false } }
+}

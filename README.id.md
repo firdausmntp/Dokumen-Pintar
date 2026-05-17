@@ -15,7 +15,7 @@ dari AI agent manapun yang mendukung <a href="https://modelcontextprotocol.io/">
   <a href="https://pypi.org/project/dokumen-pintar/"><img alt="PyPI" src="https://img.shields.io/pypi/v/dokumen-pintar?style=for-the-badge&logo=pypi&logoColor=white&labelColor=0b1020&color=1e3a5f"></a>&nbsp;
   <a href="https://python.org"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white&labelColor=0b1020"></a>&nbsp;
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-1e3a5f?style=for-the-badge&labelColor=0b1020"></a>&nbsp;
-  <a href="tests/"><img alt="730 tests passed" src="https://img.shields.io/badge/tests-730%20passed-10b981?style=for-the-badge&logo=pytest&logoColor=white&labelColor=0b1020"></a>&nbsp;
+  <a href="tests/"><img alt="1403 tests passed" src="https://img.shields.io/badge/tests-1403%20passed-10b981?style=for-the-badge&logo=pytest&logoColor=white&labelColor=0b1020"></a>&nbsp;
   <a href="htmlcov/"><img alt="100% coverage" src="https://img.shields.io/badge/coverage-100%25-10b981?style=for-the-badge&labelColor=0b1020"></a>
 </p>
 
@@ -45,9 +45,9 @@ dari AI agent manapun yang mendukung <a href="https://modelcontextprotocol.io/">
 
 **Multi-root Sandbox** — Definisikan beberapa workspace root dengan kontrol `writable` per-root. Semua path di luar sandbox ditolak otomatis.
 
-**10 Format** — Plain text, Markdown, JSON, YAML, CSV/TSV, XML/SVG, DOCX, XLSX, PPTX, PDF.
+**10 Format** — Plain text, Markdown, LaTeX, JSON / YAML, CSV / TSV, XML / SVG, DOCX, XLSX, PPTX, PDF.
 
-**30 MCP Tools** — CRUD file & konten, structured access, batch operations, search, versioning — semua tersedia sebagai tool yang bisa dipanggil AI agent.
+**62 MCP Tools** — CRUD file & konten, structured access, batch operations, search, versioning, metadata, authoring, image extraction, sections, templates, TOC, bibliography, document compare, lint — semua tersedia sebagai tool yang bisa dipanggil AI agent.
 
 **Versioning Otomatis** — Snapshot copy-on-write di setiap operasi tulis. Undo, diff, restore, dan purge kapan saja.
 
@@ -255,20 +255,27 @@ version_undo(path="documents:/laporan/q1.docx")
 
 ## Daftar Tools
 
-**30 MCP tools** berdasarkan kategori:
+**62 MCP tools** berdasarkan kategori:
 
 | Kategori | Tools |
 |:---------|:------|
-| **Workspace** | `workspace_list_roots` · `workspace_stat` · `workspace_tree` |
+| **Workspace** | `workspace_list_roots` · `workspace_stat` · `workspace_tree` · `workspace_diagnose` |
 | **File CRUD** | `file_create` · `file_delete` · `file_rename` · `file_copy` · `file_move` |
-| **Content** | `content_read` · `content_write` · `content_append` · `content_insert` · `content_replace` · `content_patch` |
-| **Structured** | `structured_get` · `structured_set` · `structured_delete` · `structured_meta` |
-| **Batch** | `batch_rename` · `batch_replace_content` · `batch_delete` |
+| **Content** | `content_read` · `content_write` · `content_append` · `content_insert` · `content_replace` · `content_delete_range` · `content_patch` · `content_diff` |
+| **Structured** | `struct_get` · `struct_set` · `struct_delete` · `struct_meta` |
+| **Metadata** | `metadata_read` · `metadata_write` · `metadata_delete` · `metadata_strip` · `metadata_read_batch` |
+| **Authoring** | `validate_spec` · `compose_docx` · `compose_pdf` · `compose_from_markdown` · `compose_to_markdown` |
+| **Sections** | `section_extract` · `section_merge` |
+| **Images** | `image_list` · `image_extract` · `image_extract_all` · `image_replace` |
+| **Templates** | `template_list` · `template_install` · `template_render` · `template_render_named` |
+| **TOC & Bibliography** | `toc_generate` · `bibliography_check` · `bibliography_format` |
+| **Compare & Lint** | `document_compare` · `document_lint` · `document_lint_fix` |
+| **Batch** | `batch_rename` · `batch_replace_content` · `batch_replace_structured` · `batch_delete` |
 | **Search** | `search_filename` · `search_content` · `search_in_format` |
 | **Versioning** | `version_list` · `version_diff` · `version_restore` · `version_undo` · `version_purge` |
-| **Semantic** * | `semantic_index` · `semantic_search` |
+| **Semantic** * | `search_semantic` · `semantic_index_path` · `semantic_stats` |
 
-<sub>* Hanya tersedia jika <code>semantic_search.enabled = true</code> dan extras <code>[semantic]</code> terinstall.</sub>
+<sub>* Hanya terdaftar jika <code>semantic_search.enabled = true</code> dan extras <code>[semantic]</code> terinstall.</sub>
 
 > Referensi lengkap parameter: **[docs/TOOLS.md](docs/TOOLS.md)**
 
@@ -307,7 +314,7 @@ pytest
 <table align="center">
 <tr>
   <td align="center" width="25%">
-    <h2>730</h2>
+    <h2>1403</h2>
     <sub>Tests passed</sub>
   </td>
   <td align="center" width="25%">
@@ -315,7 +322,7 @@ pytest
     <sub>Line + branch coverage</sub>
   </td>
   <td align="center" width="25%">
-    <h2>80%</h2>
+    <h2>100%</h2>
     <sub>Minimum threshold</sub>
   </td>
   <td align="center" width="25%">
@@ -327,6 +334,8 @@ pytest
 
 HTML coverage report: `htmlcov/index.html`
 
+> Performa & metodologi: **[docs/BENCHMARK.md](docs/BENCHMARK.md)**
+
 ---
 
 ## Dokumentasi
@@ -335,8 +344,11 @@ HTML coverage report: `htmlcov/index.html`
 |:--------|:----|
 | **[USAGE.md](docs/USAGE.md)** | Workspace URI, contoh setiap tool, resep praktis |
 | **[CONFIG.md](docs/CONFIG.md)** | Semua field config dengan tipe, default, dan catatan |
-| **[TOOLS.md](docs/TOOLS.md)** | Referensi lengkap 30 tool |
+| **[TOOLS.md](docs/TOOLS.md)** | Referensi lengkap 62 tool |
 | **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Module map, request flow, versioning, safety |
+| **[BENCHMARK.md](docs/BENCHMARK.md)** | Baseline performa dan metodologi |
+| **[profiles/](docs/profiles/)** | Enam profile config siap pakai (personal, developer, research, ...) |
+| **[AGENTS.md](AGENTS.md)** | Panduan kontributor: konvensi, dev workflow, proses PR |
 
 ---
 

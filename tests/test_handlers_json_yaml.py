@@ -120,7 +120,7 @@ def test_json_read_meta(json_handler: JsonHandler, tmp_path: Path) -> None:
 
 def test_json_read_meta_array(json_handler: JsonHandler, tmp_path: Path) -> None:
     target = tmp_path / "arr.json"
-    target.write_text('[1,2,3]', encoding="utf-8")
+    target.write_text("[1,2,3]", encoding="utf-8")
     meta = json_handler.read_meta(target)
     assert meta["top_level_type"] == "array"
     assert meta["key_count"] == 3
@@ -488,9 +488,11 @@ def test_yaml_load_invalid(yaml_handler, tmp_path: Path) -> None:
 
 def test_yaml_dump_error(yaml_handler, tmp_path: Path) -> None:
     from ruamel.yaml import YAMLError
+
     target = tmp_path / "dumperr.yaml"
     target.write_text("a: 1\n", encoding="utf-8")
     from unittest.mock import patch
+
     with patch.object(yaml_handler._yaml, "dump", side_effect=YAMLError("dump fail")):
         with pytest.raises(HandlerError, match="failed to serialize"):
             yaml_handler.structured_set(target, "$.a", 2)
@@ -498,6 +500,7 @@ def test_yaml_dump_error(yaml_handler, tmp_path: Path) -> None:
 
 def test_delete_match_root() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     match.context = MagicMock()
     match.context.value = None
@@ -507,12 +510,14 @@ def test_delete_match_root() -> None:
 
 def test_delete_match_dict_with_index() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     parent = {"0": "val", "1": "other"}
     match.context = MagicMock()
     match.context.value = parent
-    match.path = MagicMock()
+    match.path = MagicMock(spec=["fields", "indices", "index"])
     match.path.fields = None
+    match.path.indices = None
     match.path.index = 0
     _delete_match(match)
     assert "0" not in parent
@@ -520,11 +525,13 @@ def test_delete_match_dict_with_index() -> None:
 
 def test_delete_match_dict_unsupported_segment() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     match.context = MagicMock()
     match.context.value = {"a": 1}
-    match.path = MagicMock()
+    match.path = MagicMock(spec=["fields", "indices", "index"])
     match.path.fields = None
+    match.path.indices = None
     match.path.index = None
     with pytest.raises(HandlerError, match="unsupported jsonpath segment for dict"):
         _delete_match(match)
@@ -532,12 +539,14 @@ def test_delete_match_dict_unsupported_segment() -> None:
 
 def test_delete_match_list() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     parent = ["a", "b", "c"]
     match.context = MagicMock()
     match.context.value = parent
-    match.path = MagicMock()
+    match.path = MagicMock(spec=["fields", "indices", "index"])
     match.path.fields = None
+    match.path.indices = None
     match.path.index = 1
     _delete_match(match)
     assert parent == ["a", "c"]
@@ -545,11 +554,13 @@ def test_delete_match_list() -> None:
 
 def test_delete_match_list_unsupported() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     match.context = MagicMock()
     match.context.value = ["a", "b"]
-    match.path = MagicMock()
+    match.path = MagicMock(spec=["fields", "indices", "index"])
     match.path.fields = None
+    match.path.indices = None
     match.path.index = None
     with pytest.raises(HandlerError, match="unsupported jsonpath segment for list"):
         _delete_match(match)
@@ -557,11 +568,144 @@ def test_delete_match_list_unsupported() -> None:
 
 def test_delete_match_non_container() -> None:
     from unittest.mock import MagicMock
+
     match = MagicMock()
     match.context = MagicMock()
     match.context.value = 42  # not dict or list
-    match.path = MagicMock()
+    match.path = MagicMock(spec=["fields", "indices", "index"])
     match.path.fields = None
+    match.path.indices = None
     match.path.index = None
     with pytest.raises(HandlerError, match="cannot delete from parent"):
         _delete_match(match)
+
+
+# ── v1.1.0 Bug 1.1: struct_delete JSONPath list index ──
+
+
+def test_json_structured_delete_list_index(json_handler, tmp_path: Path) -> None:
+    """`$.array[N]` removes the Nth element from a JSON list."""
+    target = tmp_path / "list.json"
+    target.write_text('{"items": ["a", "b", "c"]}', encoding="utf-8")
+    json_handler.structured_delete(target, "$.items[1]")
+    import json as _json
+
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"items": ["a", "c"]}
+
+
+def test_json_structured_delete_list_index_nested(json_handler, tmp_path: Path) -> None:
+    """List indexing works inside nested objects."""
+    import json as _json
+
+    target = tmp_path / "nested.json"
+    target.write_text('{"config": {"list": [10, 20, 30]}}', encoding="utf-8")
+    json_handler.structured_delete(target, "$.config.list[0]")
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"config": {"list": [20, 30]}}
+
+
+def test_json_structured_delete_list_index_first_and_last(json_handler, tmp_path: Path) -> None:
+    """First and last indices both work."""
+    import json as _json
+
+    target = tmp_path / "first_last.json"
+    target.write_text('{"items": ["x", "y", "z"]}', encoding="utf-8")
+    json_handler.structured_delete(target, "$.items[2]")
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"items": ["x", "y"]}
+    json_handler.structured_delete(target, "$.items[0]")
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"items": ["y"]}
+
+
+def test_json_structured_delete_list_slice(json_handler, tmp_path: Path) -> None:
+    """A slice expression deletes the matched elements - high-to-low order
+    keeps earlier indices valid during iteration."""
+    import json as _json
+
+    target = tmp_path / "slice.json"
+    target.write_text('{"items": ["a", "b", "c", "d", "e"]}', encoding="utf-8")
+    json_handler.structured_delete(target, "$.items[1:4]")
+    assert _json.loads(target.read_text(encoding="utf-8")) == {"items": ["a", "e"]}
+
+
+def test_yaml_structured_delete_list_index(yaml_handler, tmp_path: Path) -> None:
+    """List indexing works for YAML too (same _delete_match path)."""
+    target = tmp_path / "list.yaml"
+    target.write_text("items:\n  - a\n  - b\n  - c\n", encoding="utf-8")
+    yaml_handler.structured_delete(target, "$.items[1]")
+    text = target.read_text(encoding="utf-8")
+    assert "- a" in text
+    assert "- b" not in text
+    assert "- c" in text
+
+
+def test_match_index_for_sort_with_indices_tuple() -> None:
+    """The sort key prefers ``indices`` (newer jsonpath-ng) over ``index``."""
+    from unittest.mock import MagicMock
+
+    from dokumen_pintar.handlers.json_yaml_handler import _match_index_for_sort
+
+    match = MagicMock()
+    match.path = MagicMock(spec=["indices", "index"])
+    match.path.indices = (5,)
+    match.path.index = 99  # should be ignored when indices is set
+    assert _match_index_for_sort(match) == 5
+
+
+def test_match_index_for_sort_with_legacy_index_attr() -> None:
+    """Falls back to ``index`` when ``indices`` is missing/empty."""
+    from unittest.mock import MagicMock
+
+    from dokumen_pintar.handlers.json_yaml_handler import _match_index_for_sort
+
+    match = MagicMock()
+    match.path = MagicMock(spec=["indices", "index"])
+    match.path.indices = ()
+    match.path.index = 7
+    assert _match_index_for_sort(match) == 7
+
+
+def test_match_index_for_sort_no_index_attrs() -> None:
+    """Returns -1 when neither attribute is present (non-list match)."""
+    from unittest.mock import MagicMock
+
+    from dokumen_pintar.handlers.json_yaml_handler import _match_index_for_sort
+
+    match = MagicMock()
+    # spec=[] strips both attributes
+    match.path = MagicMock(spec=[])
+    assert _match_index_for_sort(match) == -1
+
+
+def test_delete_match_dict_with_indices_attr() -> None:
+    """Dict parent + Index segment uses string fallback."""
+    from unittest.mock import MagicMock
+
+    from dokumen_pintar.handlers.json_yaml_handler import _delete_match
+
+    parent = {"0": "first", "1": "second"}
+    match = MagicMock()
+    match.context = MagicMock()
+    match.context.value = parent
+    match.path = MagicMock(spec=["indices", "fields", "index"])
+    match.path.indices = (1,)
+    match.path.fields = None
+    match.path.index = None
+    _delete_match(match)
+    assert parent == {"0": "first"}
+
+
+def test_delete_match_list_out_of_range_silent() -> None:
+    """Out-of-range list index is a silent no-op (matches existing semantics)."""
+    from unittest.mock import MagicMock
+
+    from dokumen_pintar.handlers.json_yaml_handler import _delete_match
+
+    parent = ["a", "b"]
+    match = MagicMock()
+    match.context = MagicMock()
+    match.context.value = parent
+    match.path = MagicMock(spec=["indices", "fields", "index"])
+    match.path.indices = (99,)
+    match.path.fields = None
+    match.path.index = None
+    _delete_match(match)
+    assert parent == ["a", "b"]

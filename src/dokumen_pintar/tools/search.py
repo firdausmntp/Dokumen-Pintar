@@ -2,56 +2,58 @@
 
 from __future__ import annotations
 
-import fnmatch
 import re
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
 from ..errors import DokumenPintarError
-from ..utils.globbing import any_match, compile_globs, split_root_glob
+from ..utils.walking import iter_files
 from ._common import resolve_for_read
 
 
-def _iter_files(
-    ctx: AppContext,
-    *,
-    root_filter: str | None,
-    glob: str | None,
-) -> Iterator[tuple[str, Path, Path]]:
-    """Yield (root_name, abs_path, root_abs) for each non-excluded file.
+def _docx_heading_context(path: Path) -> dict[str, Any] | None:
+    """Build a heading-breadcrumb map for a DOCX file.
 
-    The glob may be a workspace URI like ``kp:/*.docx``; the URI prefix is
-    stripped and used as a root filter (which combines with ``root_filter``).
+    Returns ``{"text": "...", "heading_map": {paragraph_idx: "BAB I > 1.1"}, "lines": [...]}``
+    or ``None`` if the file isn't a DOCX or python-docx fails to load it.
+    The ``lines`` list is the per-paragraph extracted text (1:1 with
+    paragraph index), suitable for matching ``search_content`` hits to
+    a structural location.
     """
-    glob_root, bare_glob = split_root_glob(glob)
-    if glob_root and root_filter and glob_root != root_filter:
-        # Conflicting filters — caller asked for one root in the URI and a
-        # different one via ``root_filter``. Yield nothing.
-        return
-    effective_root = root_filter or glob_root
-    excludes = compile_globs(ctx.config.exclude_patterns)
-    for root_cfg, root_abs in ctx.guard.roots:
-        if effective_root and root_cfg.name != effective_root:
-            continue
-        if not root_abs.exists():
-            continue
-        for p in root_abs.rglob("*"):
-            if not p.is_file():
-                continue
-            try:
-                rel = p.relative_to(root_abs).as_posix()
-            except ValueError:
-                continue
-            if any_match(rel, excludes):
-                continue
-            if bare_glob and not (
-                fnmatch.fnmatch(rel, bare_glob) or fnmatch.fnmatch(p.name, bare_glob)
-            ):
-                continue
-            yield root_cfg.name, p, root_abs
+    if path.suffix.lower() != ".docx":
+        return None
+    try:
+        from docx import Document  # local import - keeps cold path lean
+    except ImportError:  # pragma: no cover - python-docx is a hard dep
+        return None
+    try:
+        doc = Document(str(path))
+    except Exception:  # noqa: BLE001 - python-docx surfaces many exception types
+        return None
+
+    breadcrumb: list[tuple[int, str]] = []  # (level, text) stack
+    heading_map: dict[int, str] = {}
+    lines: list[str] = []
+    for idx, para in enumerate(doc.paragraphs):
+        style_name = getattr(getattr(para, "style", None), "name", "") or ""
+        m = re.match(r"^[Hh]eading\s+(\d+)$", style_name.strip())
+        if m:
+            level = int(m.group(1))
+            while breadcrumb and breadcrumb[-1][0] >= level:
+                breadcrumb.pop()
+            breadcrumb.append((level, para.text or ""))
+        elif style_name.lower() == "title":
+            breadcrumb = [(0, para.text or "")]
+        heading_map[idx] = " > ".join(text for _, text in breadcrumb if text)
+        lines.append(para.text or "")
+    return {
+        "text": "\n".join(lines),
+        "heading_map": heading_map,
+        "lines": lines,
+    }
 
 
 def register(mcp: FastMCP, ctx: AppContext) -> None:
@@ -65,7 +67,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         limit: int = 200,
     ) -> dict[str, Any]:
         hits: list[dict[str, Any]] = []
-        for root_name, p, root_abs in _iter_files(ctx, root_filter=root, glob=glob_pattern):
+        for root_name, p, root_abs in iter_files(ctx, root_filter=root, glob=glob_pattern):
             hits.append(
                 {
                     "uri": f"{root_name}:/{p.relative_to(root_abs).as_posix()}",
@@ -81,7 +83,13 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         name="search_content",
         description=(
             "Plain-text content search across the workspace. `regex=True` to use "
-            "Python regex. Files are read via their handler's `extract_for_search`."
+            "Python regex. Files are read via their handler's `extract_for_search`. "
+            "Set `include_context=True` to enrich each hit with structural location "
+            "(heading_path + paragraph_index for DOCX). Set `language='id'` and "
+            "`stem=True` to enable Sastrawi-based Indonesian stemming - the query "
+            "and document text are both stemmed before matching, so 'mengatakan' "
+            "matches 'berkata', 'perkataan', etc. Default False keeps the response "
+            "shape backwards-compatible with v1.0.x."
         ),
     )
     def search_content(
@@ -92,12 +100,29 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         case_sensitive: bool = False,
         max_results: int = 200,
         max_files: int = 5000,
+        include_context: bool = False,
+        language: str | None = None,
+        stem: bool = False,
     ) -> dict[str, Any]:
+        if stem and language not in ("id",):
+            raise DokumenPintarError(f"stemming requires language='id' (got language={language!r})")
         flags = 0 if case_sensitive else re.IGNORECASE
-        pattern = re.compile(query if regex else re.escape(query), flags)
+        # Pre-stem the query when Indonesian stemming is requested. The
+        # pattern still runs against (also-stemmed) document text below.
+        effective_query = query
+        if stem:
+            try:
+                from ..utils.stemming_id import stem_text
+            except ImportError as exc:  # pragma: no cover - Sastrawi is bundled in v1.1.0
+                raise DokumenPintarError(
+                    "Indonesian stemming requires Sastrawi. "
+                    "Install with: pip install dokumen-pintar[indonesian]"
+                ) from exc
+            effective_query = stem_text(query)
+        pattern = re.compile(effective_query if regex else re.escape(effective_query), flags)
         hits: list[dict[str, Any]] = []
         scanned = 0
-        for root_name, p, root_abs in _iter_files(ctx, root_filter=root, glob=glob):
+        for root_name, p, root_abs in iter_files(ctx, root_filter=root, glob=glob):
             scanned += 1
             if scanned > max_files:
                 break
@@ -106,25 +131,61 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
                 continue
             try:
                 ctx.guard.ensure_within_size_limit(p)
-                text = handler.extract_for_search(p)
+                text = ctx.extract_cache.get_or_extract(p, handler.extract_for_search)
             except DokumenPintarError:
                 continue
             except Exception:
                 continue
-            for m in pattern.finditer(text):
-                line_no = text.count("\n", 0, m.start()) + 1
-                line_start = text.rfind("\n", 0, m.start()) + 1
-                line_end = text.find("\n", m.end())
+            search_text = text
+            if stem:
+                from ..utils.stemming_id import stem_text as _stem
+
+                search_text = _stem(text)
+
+            # Pre-compute heading context per DOCX once (re-used across all hits).
+            ctx_info = (
+                _docx_heading_context(p) if include_context and handler.name == "docx" else None
+            )
+            if ctx_info is not None:
+                # When we have structured context, run the regex against the
+                # paragraph-by-paragraph text so paragraph_index is meaningful.
+                # The cached extract is still used for the snippet so callers
+                # see what they expected - tables are included, etc.
+                heading_map = ctx_info["heading_map"]
+                lines = ctx_info["lines"]
+            else:
+                heading_map = None
+                lines = None
+
+            for m in pattern.finditer(search_text):
+                line_no = search_text.count("\n", 0, m.start()) + 1
+                line_start = search_text.rfind("\n", 0, m.start()) + 1
+                line_end = search_text.find("\n", m.end())
                 if line_end == -1:
-                    line_end = len(text)
-                hits.append(
-                    {
-                        "uri": f"{root_name}:/{p.relative_to(root_abs).as_posix()}",
-                        "line": line_no,
-                        "snippet": text[line_start:line_end][:240],
-                        "match": m.group(0)[:120],
+                    line_end = len(search_text)
+                hit: dict[str, Any] = {
+                    "uri": f"{root_name}:/{p.relative_to(root_abs).as_posix()}",
+                    "line": line_no,
+                    "snippet": search_text[line_start:line_end][:240],
+                    "match": m.group(0)[:120],
+                }
+                if include_context and ctx_info is not None:
+                    snippet_line = search_text[line_start:line_end]
+                    para_idx: int | None = None
+                    for i, line in enumerate(lines):  # type: ignore[arg-type]
+                        if line == snippet_line:
+                            para_idx = i
+                            break
+                    hit["context"] = {
+                        "format": "docx",
+                        "paragraph_index": para_idx,
+                        "heading_path": (
+                            heading_map.get(para_idx, "")  # type: ignore[union-attr]
+                            if para_idx is not None
+                            else ""
+                        ),
                     }
-                )
+                hits.append(hit)
                 if len(hits) >= max_results:
                     return {"query": query, "matches": hits, "truncated": True}
         return {"query": query, "matches": hits, "truncated": False}
@@ -151,11 +212,11 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         flags = 0 if case_sensitive else re.IGNORECASE
         pattern = re.compile(query if regex else re.escape(query), flags)
         hits: list[dict[str, Any]] = []
-        for root_name, p, root_abs in _iter_files(ctx, root_filter=root, glob=glob):
+        for root_name, p, root_abs in iter_files(ctx, root_filter=root, glob=glob):
             if p.suffix.lower() not in handler.extensions:
                 continue
             try:
-                text = handler.extract_for_search(p)
+                text = ctx.extract_cache.get_or_extract(p, handler.extract_for_search)
             except DokumenPintarError:
                 continue
             for m in pattern.finditer(text):

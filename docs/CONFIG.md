@@ -6,6 +6,10 @@ Dokumen-Pintar loads its configuration from a JSON file validated against a Pyda
 
 For the environment variable that controls config discovery, see [Environment Variable](#environment-variable) below.
 
+> **Looking for a starting point?** Six pre-tuned profiles live in [profiles/](profiles/) - copy the one that matches your workflow and edit the `roots`. The README there walks through how to pick and customize.
+
+> **Editor support.** Every config file in this repo references [`config.schema.json`](config.schema.json) via `$schema`. VS Code, Cursor, IntelliJ, and Zed will give you autocomplete, hover docs, and inline validation. Add the same `$schema` line to your own configs to opt in.
+
 <p>
   <svg width="100%" height="2" xmlns="http://www.w3.org/2000/svg" role="presentation"><defs><linearGradient id="dc" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#1e3a5f" stop-opacity="0"/><stop offset=".5" stop-color="#1e3a5f"/><stop offset="1" stop-color="#1e3a5f" stop-opacity="0"/></linearGradient></defs><rect width="100%" height="2" fill="url(#dc)"/></svg>
 </p>
@@ -133,7 +137,7 @@ Absolute path to the shared snapshot directory. Required when `storage_mode` is 
 
 **Type:** `int` (>= 0) | **Default:** `30`
 
-Snapshots older than this many days are removed by `version_purge`. Set to `0` to disable automatic age-based pruning (manual purge still works).
+Snapshots older than this many days are removed by `version_purge` when called with no argument. Set to `0` to disable automatic age-based pruning — manual purge still works, including the v1.1.0 explicit purge-all (`older_than_days=0` argument), which is unrelated to this config field.
 
 ---
 
@@ -306,3 +310,39 @@ All other fields take their defaults.
 ## Full annotated example
 
 See `dokumen-pintar.config.example.json` in the project root for a complete example with all sections populated.
+
+
+---
+
+## Optional extras
+
+The wheel ships with all core dependencies. Two optional extras unlock specialised features:
+
+### `[semantic]` - Vector semantic search
+
+```bash
+pip install dokumen-pintar[semantic]
+```
+
+Pulls in `sentence-transformers`, `numpy`, and `scikit-learn`. Required to set `semantic_search.enabled = true`. The first call downloads the embedding model (~80 MB for the default `all-MiniLM-L6-v2`).
+
+### `[indonesian]` - Sastrawi morphological stemmer
+
+```bash
+pip install dokumen-pintar[indonesian]
+```
+
+Pulls in `Sastrawi`. Required for `search_content` calls with `language="id"` + `stem=True`. The stemmer collapses Indonesian morphological variants — `mengatakan` / `berkata` / `perkataan` all stem to `kata`.
+
+There is no config field for this extra; it activates automatically when an agent passes `language="id" stem=True` to `search_content`. The dictionary loads lazily on first use (~50 ms), then is cached process-wide.
+
+---
+
+## See also
+
+- **[TOOLS.md](TOOLS.md)** - full parameter reference
+- **[USAGE.md](USAGE.md)** - workflow recipes
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - module map
+- **[BENCHMARK.md](BENCHMARK.md)** - performance baselines
+- **[profiles/README.md](profiles/README.md)** - six pre-tuned config profiles
+- **[config.schema.json](config.schema.json)** - JSON schema for editor autocomplete

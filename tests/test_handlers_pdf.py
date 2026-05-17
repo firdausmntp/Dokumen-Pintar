@@ -252,11 +252,15 @@ def test_structured_get_pages_info(handler: PdfHandler, tmp_path: Path) -> None:
 def test_structured_set_metadata_with_keys(handler: PdfHandler, tmp_path: Path) -> None:
     target = tmp_path / "sm.pdf"
     _create_pdf(target)
-    handler.structured_set(target, "metadata", {
-        "title": "My PDF",
-        "author": "Tester",
-        "subject": "Testing",
-    })
+    handler.structured_set(
+        target,
+        "metadata",
+        {
+            "title": "My PDF",
+            "author": "Tester",
+            "subject": "Testing",
+        },
+    )
     meta = handler.structured_get(target, "metadata")
     assert meta["title"] is not None
 
@@ -401,14 +405,18 @@ def test_read_meta_missing_file(handler: PdfHandler, tmp_path: Path) -> None:
 def test_structured_set_metadata_friendly_keys(handler: PdfHandler, tmp_path: Path) -> None:
     target = tmp_path / "fk.pdf"
     _create_pdf(target)
-    handler.structured_set(target, "metadata", {
-        "title": "Test Title",
-        "author": "Test Author",
-        "creator": "Test Creator",
-        "producer": "Test Producer",
-        "creation_date": "2024-01-01",
-        "modification_date": "2024-12-31",
-    })
+    handler.structured_set(
+        target,
+        "metadata",
+        {
+            "title": "Test Title",
+            "author": "Test Author",
+            "creator": "Test Creator",
+            "producer": "Test Producer",
+            "creation_date": "2024-01-01",
+            "modification_date": "2024-12-31",
+        },
+    )
     meta = handler.structured_get(target, "metadata")
     assert meta["title"] is not None
 
@@ -416,14 +424,15 @@ def test_structured_set_metadata_friendly_keys(handler: PdfHandler, tmp_path: Pa
 def test_flatten_outline_nested() -> None:
     # Test with nested list (simulating outline structure)
     from unittest.mock import MagicMock
+
     reader = MagicMock()
     reader.get_destination_page_number.return_value = 0
-    
+
     item = MagicMock()
     item.title = "Chapter 1"
     nested_item = MagicMock()
     nested_item.title = "Section 1.1"
-    
+
     items = [item, [nested_item]]
     result = _flatten_outline(items, reader)
     assert len(result) == 2
@@ -433,12 +442,13 @@ def test_flatten_outline_nested() -> None:
 
 def test_flatten_outline_exception_on_page_number() -> None:
     from unittest.mock import MagicMock
+
     reader = MagicMock()
     reader.get_destination_page_number.side_effect = Exception("bad")
-    
+
     item = MagicMock()
     item.title = "Bad Item"
-    
+
     result = _flatten_outline([item], reader)
     assert len(result) == 1
     assert result[0]["page"] is None
@@ -556,6 +566,7 @@ def test_parse_page_expr_not_page() -> None:
 
 def test_read_text_os_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "oserr.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=OSError("disk error")):
@@ -566,6 +577,7 @@ def test_read_text_os_error(handler: PdfHandler, tmp_path: Path) -> None:
 def test_read_text_pdfread_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
     from pypdf.errors import PdfReadError
+
     target = tmp_path / "prderr.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=PdfReadError("corrupt")):
@@ -573,29 +585,89 @@ def test_read_text_pdfread_error(handler: PdfHandler, tmp_path: Path) -> None:
             handler.read_text(target)
 
 
-def test_extract_for_search_pdfplumber_fails_pypdf_fallback(handler: PdfHandler, tmp_path: Path) -> None:
-    from unittest.mock import patch, MagicMock
+def test_extract_for_search_pdfplumber_fails_pypdf_fallback(
+    handler: PdfHandler, tmp_path: Path
+) -> None:
+    """pypdf is now the primary parser; verify it succeeds even when pdfplumber would fail."""
+    from unittest.mock import patch
+
     target = tmp_path / "fb.pdf"
     _create_pdf(target, pages=1)
-    # Make pdfplumber fail so pypdf fallback is used
+    # pypdf is primary; pdfplumber should not even be reached for a healthy PDF.
     with patch("pdfplumber.open", side_effect=Exception("pdfplumber fail")):
         text = handler.extract_for_search(target)
-        # pypdf fallback should still extract text
         assert "Page 0" in text
+
+
+def test_extract_for_search_pypdf_fails_pdfplumber_fallback(
+    handler: PdfHandler, tmp_path: Path
+) -> None:
+    """When pypdf raises, the pdfplumber fallback fills in."""
+    from unittest.mock import patch
+
+    target = tmp_path / "fbplumber.pdf"
+    _create_pdf(target, pages=1)
+    with patch("pypdf.PdfReader", side_effect=Exception("pypdf fail")):
+        text = handler.extract_for_search(target)
+        assert "Page 0" in text
+
+
+def test_extract_for_search_encrypted_decrypts_ok(handler: PdfHandler, tmp_path: Path) -> None:
+    """Empty-password decrypt success should let pypdf primary path proceed."""
+    from unittest.mock import patch, MagicMock, PropertyMock
+
+    target = tmp_path / "enc_ok.pdf"
+    _create_pdf(target, pages=1)
+    mock_reader = MagicMock()
+    type(mock_reader).is_encrypted = PropertyMock(return_value=True)
+    mock_reader.decrypt.return_value = 1  # decrypt success
+    page = MagicMock()
+    page.extract_text.return_value = "decrypted content"
+    mock_reader.pages = [page]
+    with patch("pypdf.PdfReader", return_value=mock_reader):
+        text = handler.extract_for_search(target)
+        assert "decrypted content" in text
+
+
+def test_extract_for_search_pdfplumber_page_exception(handler: PdfHandler, tmp_path: Path) -> None:
+    """pdfplumber fallback skips pages that raise on extract_text."""
+    from unittest.mock import patch, MagicMock
+
+    target = tmp_path / "plumb_pgex.pdf"
+    _create_pdf(target, pages=2)
+    # Force pypdf primary to fail entirely so pdfplumber fallback runs.
+    mock_pdf = MagicMock()
+    page_fail = MagicMock()
+    page_fail.extract_text.side_effect = Exception("page bad")
+    page_ok = MagicMock()
+    page_ok.extract_text.return_value = "fallback ok"
+    mock_pdf.pages = [page_fail, page_ok]
+    mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
+    mock_pdf.__exit__ = MagicMock(return_value=False)
+    with (
+        patch("pypdf.PdfReader", side_effect=Exception("pypdf fail")),
+        patch("pdfplumber.open", return_value=mock_pdf),
+    ):
+        text = handler.extract_for_search(target)
+        assert "fallback ok" in text
 
 
 def test_extract_for_search_both_fail(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "bothfail.pdf"
     _create_pdf(target)
-    with patch("pdfplumber.open", side_effect=Exception("fail1")), \
-         patch("pypdf.PdfReader", side_effect=Exception("fail2")):
+    with (
+        patch("pdfplumber.open", side_effect=Exception("fail1")),
+        patch("pypdf.PdfReader", side_effect=Exception("fail2")),
+    ):
         text = handler.extract_for_search(target)
         assert text == ""
 
 
 def test_structured_get_page_os_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "pgoserr.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=OSError("disk")):
@@ -605,6 +677,7 @@ def test_structured_get_page_os_error(handler: PdfHandler, tmp_path: Path) -> No
 
 def test_structured_get_pages_os_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "psoserr.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=OSError("disk")):
@@ -614,14 +687,15 @@ def test_structured_get_pages_os_error(handler: PdfHandler, tmp_path: Path) -> N
 
 def test_open_reader_encrypted_empty_decrypt(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "encr.pdf"
     _create_pdf(target)
-    
+
     mock_reader = MagicMock()
     type(mock_reader).is_encrypted = PropertyMock(return_value=True)
     mock_reader.decrypt.return_value = 1  # success
     mock_reader.outline = []
-    
+
     with patch("pypdf.PdfReader", return_value=mock_reader):
         result = handler.structured_get(target, "outline")
         assert isinstance(result, list)
@@ -629,13 +703,14 @@ def test_open_reader_encrypted_empty_decrypt(handler: PdfHandler, tmp_path: Path
 
 def test_open_reader_encrypted_fails(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "encfail.pdf"
     _create_pdf(target)
-    
+
     mock_reader = MagicMock()
     type(mock_reader).is_encrypted = PropertyMock(return_value=True)
     mock_reader.decrypt.return_value = 0  # fail
-    
+
     with patch("pypdf.PdfReader", return_value=mock_reader):
         with pytest.raises(HandlerError, match="encrypted"):
             handler.structured_get(target, "outline")
@@ -643,16 +718,17 @@ def test_open_reader_encrypted_fails(handler: PdfHandler, tmp_path: Path) -> Non
 
 def test_read_meta_encrypted_decrypt_ok(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "encmeta.pdf"
     _create_pdf(target)
-    
+
     mock_reader = MagicMock()
     type(mock_reader).is_encrypted = PropertyMock(return_value=True)
     mock_reader.decrypt.return_value = 1
     mock_reader.pages = [MagicMock()]
     mock_reader.metadata = {}
     mock_reader.pdf_header = "%PDF-1.4"
-    
+
     with patch("pypdf.PdfReader", return_value=mock_reader):
         meta = handler.read_meta(target)
         assert meta["encrypted"] is True
@@ -661,13 +737,14 @@ def test_read_meta_encrypted_decrypt_ok(handler: PdfHandler, tmp_path: Path) -> 
 
 def test_structured_delete_page_encrypted_fail(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "dencfail.pdf"
     _create_pdf(target)
-    
+
     mock_reader = MagicMock()
     type(mock_reader).is_encrypted = PropertyMock(return_value=True)
     mock_reader.decrypt.return_value = 0
-    
+
     with patch("pypdf.PdfReader", return_value=mock_reader):
         with pytest.raises(HandlerError, match="encrypted"):
             handler.structured_delete(target, "page:0")
@@ -675,8 +752,10 @@ def test_structured_delete_page_encrypted_fail(handler: PdfHandler, tmp_path: Pa
 
 # ── Additional PDF coverage tests ──
 
+
 def test_open_reader_decrypt_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "decexc.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -689,6 +768,7 @@ def test_open_reader_decrypt_exception(handler: PdfHandler, tmp_path: Path) -> N
 
 def test_read_meta_oserror(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "metaos.pdf"
     _create_pdf(target)
     with patch("pypdf.PdfReader", side_effect=OSError("disk")):
@@ -698,6 +778,7 @@ def test_read_meta_oserror(handler: PdfHandler, tmp_path: Path) -> None:
 
 def test_read_meta_decrypt_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "mdecex.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -713,6 +794,7 @@ def test_read_meta_decrypt_exception(handler: PdfHandler, tmp_path: Path) -> Non
 
 def test_read_meta_pages_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "mpgex.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -727,6 +809,7 @@ def test_read_meta_pages_exception(handler: PdfHandler, tmp_path: Path) -> None:
 
 def test_read_meta_pdf_header_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "mhdrex.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -740,37 +823,44 @@ def test_read_meta_pdf_header_exception(handler: PdfHandler, tmp_path: Path) -> 
 
 
 def test_extract_for_search_page_exception_continues(handler: PdfHandler, tmp_path: Path) -> None:
-    from unittest.mock import patch, MagicMock
+    """A failing page in the primary parser (pypdf) is skipped, others kept."""
+    from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "efspe.pdf"
     _create_pdf(target, pages=2)
-    mock_pdf = MagicMock()
+    mock_reader = MagicMock()
+    type(mock_reader).is_encrypted = PropertyMock(return_value=False)
     page_ok = MagicMock()
     page_ok.extract_text.return_value = "good text"
     page_fail = MagicMock()
     page_fail.extract_text.side_effect = Exception("page fail")
-    mock_pdf.pages = [page_fail, page_ok]
-    mock_pdf.__enter__ = MagicMock(return_value=mock_pdf)
-    mock_pdf.__exit__ = MagicMock(return_value=False)
-    with patch("pdfplumber.open", return_value=mock_pdf):
+    mock_reader.pages = [page_fail, page_ok]
+    with patch("pypdf.PdfReader", return_value=mock_reader):
         text = handler.extract_for_search(target)
         assert "good text" in text
 
 
-def test_extract_for_search_encrypted_pypdf_fallback_fails(handler: PdfHandler, tmp_path: Path) -> None:
+def test_extract_for_search_encrypted_pypdf_fallback_fails(
+    handler: PdfHandler, tmp_path: Path
+) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "efsef.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
     type(mock_reader).is_encrypted = PropertyMock(return_value=True)
     mock_reader.decrypt.side_effect = Exception("fail")
-    with patch("pdfplumber.open", side_effect=Exception("plumber fail")), \
-         patch("pypdf.PdfReader", return_value=mock_reader):
+    with (
+        patch("pdfplumber.open", side_effect=Exception("plumber fail")),
+        patch("pypdf.PdfReader", return_value=mock_reader),
+    ):
         text = handler.extract_for_search(target)
         assert text == ""
 
 
 def test_extract_for_search_pypdf_page_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "efspx.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -778,14 +868,17 @@ def test_extract_for_search_pypdf_page_exception(handler: PdfHandler, tmp_path: 
     page_bad = MagicMock()
     page_bad.extract_text.side_effect = Exception("extract fail")
     mock_reader.pages = [page_bad]
-    with patch("pdfplumber.open", side_effect=Exception("plumber fail")), \
-         patch("pypdf.PdfReader", return_value=mock_reader):
+    with (
+        patch("pdfplumber.open", side_effect=Exception("plumber fail")),
+        patch("pypdf.PdfReader", return_value=mock_reader),
+    ):
         text = handler.extract_for_search(target)
         assert text == ""
 
 
 def test_structured_get_page_generic_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock
+
     target = tmp_path / "gpex.pdf"
     _create_pdf(target)
     mock_pdf = MagicMock()
@@ -800,6 +893,7 @@ def test_structured_get_page_generic_exception(handler: PdfHandler, tmp_path: Pa
 
 def test_structured_get_pages_generic_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "gpsex.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=RuntimeError("bad")):
@@ -810,6 +904,7 @@ def test_structured_get_pages_generic_exception(handler: PdfHandler, tmp_path: P
 def test_structured_get_page_pdfread_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
     from pypdf.errors import PdfReadError
+
     target = tmp_path / "gpprd.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=PdfReadError("corrupt")):
@@ -819,6 +914,7 @@ def test_structured_get_page_pdfread_error(handler: PdfHandler, tmp_path: Path) 
 
 def test_structured_get_pages_page_extract_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock
+
     target = tmp_path / "gpspex.pdf"
     _create_pdf(target)
     mock_pdf = MagicMock()
@@ -835,6 +931,7 @@ def test_structured_get_pages_page_extract_exception(handler: PdfHandler, tmp_pa
 def test_structured_delete_page_oserror(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
     import pypdf
+
     target = tmp_path / "dposerr.pdf"
     _create_pdf(target, pages=2)
     with patch.object(pypdf.PdfWriter, "write", side_effect=OSError("write fail")):
@@ -845,6 +942,7 @@ def test_structured_delete_page_oserror(handler: PdfHandler, tmp_path: Path) -> 
 def test_structured_delete_page_pdfread_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
     from pypdf.errors import PdfReadError
+
     target = tmp_path / "dpprd.pdf"
     _create_pdf(target)
     with patch("pypdf.PdfReader", side_effect=PdfReadError("bad")):
@@ -854,6 +952,7 @@ def test_structured_delete_page_pdfread_error(handler: PdfHandler, tmp_path: Pat
 
 def test_structured_delete_page_os_error_reader(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "dposr.pdf"
     _create_pdf(target)
     with patch("pypdf.PdfReader", side_effect=OSError("no disk")):
@@ -861,8 +960,11 @@ def test_structured_delete_page_os_error_reader(handler: PdfHandler, tmp_path: P
             handler.structured_delete(target, "page:0")
 
 
-def test_structured_delete_page_encrypted_decrypt_exception(handler: PdfHandler, tmp_path: Path) -> None:
+def test_structured_delete_page_encrypted_decrypt_exception(
+    handler: PdfHandler, tmp_path: Path
+) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "ddecex.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()
@@ -876,6 +978,7 @@ def test_structured_delete_page_encrypted_decrypt_exception(handler: PdfHandler,
 def test_structured_set_metadata_password_error(handler: PdfHandler, tmp_path: Path) -> None:
     import pikepdf
     from unittest.mock import patch
+
     target = tmp_path / "smpw.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=pikepdf.PasswordError("password required")):
@@ -886,6 +989,7 @@ def test_structured_set_metadata_password_error(handler: PdfHandler, tmp_path: P
 def test_structured_set_metadata_pdf_error(handler: PdfHandler, tmp_path: Path) -> None:
     import pikepdf
     from unittest.mock import patch
+
     target = tmp_path / "smpe.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=pikepdf.PdfError("corrupt")):
@@ -895,6 +999,7 @@ def test_structured_set_metadata_pdf_error(handler: PdfHandler, tmp_path: Path) 
 
 def test_structured_set_metadata_os_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "smos.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=OSError("disk full")):
@@ -905,6 +1010,7 @@ def test_structured_set_metadata_os_error(handler: PdfHandler, tmp_path: Path) -
 def test_structured_delete_metadata_password_error(handler: PdfHandler, tmp_path: Path) -> None:
     import pikepdf
     from unittest.mock import patch
+
     target = tmp_path / "dmpw.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=pikepdf.PasswordError("pw")):
@@ -915,6 +1021,7 @@ def test_structured_delete_metadata_password_error(handler: PdfHandler, tmp_path
 def test_structured_delete_metadata_pdf_error(handler: PdfHandler, tmp_path: Path) -> None:
     import pikepdf
     from unittest.mock import patch
+
     target = tmp_path / "dmpe.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=pikepdf.PdfError("corrupt")):
@@ -924,6 +1031,7 @@ def test_structured_delete_metadata_pdf_error(handler: PdfHandler, tmp_path: Pat
 
 def test_structured_delete_metadata_os_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
+
     target = tmp_path / "dmos.pdf"
     _create_pdf(target)
     with patch("pikepdf.open", side_effect=OSError("nope")):
@@ -934,6 +1042,7 @@ def test_structured_delete_metadata_os_error(handler: PdfHandler, tmp_path: Path
 def test_structured_get_pages_pdfread_error(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch
     from pypdf.errors import PdfReadError
+
     target = tmp_path / "pgprd.pdf"
     _create_pdf(target)
     with patch("pdfplumber.open", side_effect=PdfReadError("corrupt")):
@@ -943,6 +1052,7 @@ def test_structured_get_pages_pdfread_error(handler: PdfHandler, tmp_path: Path)
 
 def test_structured_get_outline_exception(handler: PdfHandler, tmp_path: Path) -> None:
     from unittest.mock import patch, MagicMock, PropertyMock
+
     target = tmp_path / "outex.pdf"
     _create_pdf(target)
     mock_reader = MagicMock()

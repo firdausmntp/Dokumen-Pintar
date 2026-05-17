@@ -355,3 +355,189 @@ def test_walk_files_relative_to_valueerror(
         with patch.object(Path, "is_file", _is_file_override):
             result = _tool(mcp, "search_content")(query="test")
     assert isinstance(result["matches"], list)
+
+
+
+# ── v1.1.0 2.4: search_content heading context ──
+
+
+def test_search_content_include_context_docx(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """``include_context=True`` enriches DOCX hits with heading_path + paragraph_index."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "report.docx"
+    doc = Document()
+    doc.add_paragraph("BAB I", style="Heading 1")
+    doc.add_paragraph("1.1 Latar Belakang", style="Heading 2")
+    doc.add_paragraph("Integrasi data SAP ke sistem internal.")
+    doc.add_paragraph("BAB II", style="Heading 1")
+    doc.add_paragraph("Pembahasan integrasi lanjutan.")
+    doc.save(str(p))
+
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(query="integrasi", include_context=True)
+    matches = result["matches"]
+    assert len(matches) >= 2
+    # Hit inside Latar Belakang section.
+    bab1_hit = next(m for m in matches if "SAP" in m["snippet"])
+    assert bab1_hit["context"]["format"] == "docx"
+    assert bab1_hit["context"]["heading_path"] == "BAB I > 1.1 Latar Belakang"
+    assert isinstance(bab1_hit["context"]["paragraph_index"], int)
+    # Hit inside BAB II.
+    bab2_hit = next(m for m in matches if "lanjutan" in m["snippet"])
+    assert bab2_hit["context"]["heading_path"] == "BAB II"
+
+
+def test_search_content_include_context_with_title(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """A `Title` style resets the breadcrumb stack to a single entry."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "title.docx"
+    doc = Document()
+    doc.add_paragraph("Laporan KP", style="Title")
+    doc.add_paragraph("Pendahuluan integrasi sistem.")
+    doc.save(str(p))
+
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(query="integrasi", include_context=True)
+    assert result["matches"][0]["context"]["heading_path"] == "Laporan KP"
+
+
+def test_search_content_include_context_no_match_returns_no_context(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """If the snippet doesn't line up with any paragraph (table cell, e.g.),
+    paragraph_index falls back to None and heading_path is empty."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "tbl.docx"
+    doc = Document()
+    doc.add_paragraph("Heading", style="Heading 1")
+    t = doc.add_table(rows=1, cols=1)
+    t.cell(0, 0).text = "table-only-text"
+    doc.save(str(p))
+
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(
+        query="table-only-text", include_context=True
+    )
+    if result["matches"]:
+        ctx_info = result["matches"][0]["context"]
+        # The DOCX heading walker only inspects body paragraphs,
+        # so a hit that lives in a table cell yields paragraph_index=None.
+        assert ctx_info["paragraph_index"] is None
+        assert ctx_info["heading_path"] == ""
+
+
+def test_search_content_include_context_off_keeps_legacy_shape(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`include_context=False` (default) does not add a `context` field."""
+    from docx import Document
+
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "noctx.docx"
+    doc = Document()
+    doc.add_paragraph("alpha test")
+    doc.save(str(p))
+
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(query="alpha")
+    assert result["matches"]
+    assert "context" not in result["matches"][0]
+
+
+def test_docx_heading_context_corrupted_file_returns_none(tmp_path: Path) -> None:
+    from dokumen_pintar.tools.search import _docx_heading_context
+
+    # Truncated zip header - python-docx will refuse to load.
+    p = tmp_path / "broken.docx"
+    p.write_bytes(b"PK\x03\x04not-a-real-docx")
+    assert _docx_heading_context(p) is None
+
+
+def test_docx_heading_context_non_docx_returns_none(tmp_path: Path) -> None:
+    from dokumen_pintar.tools.search import _docx_heading_context
+
+    p = tmp_path / "plain.txt"
+    p.write_text("hi", encoding="utf-8")
+    assert _docx_heading_context(p) is None
+
+
+
+# ── v1.1.0 E.1: Sastrawi Indonesian stemming ──
+
+
+def test_search_content_stemmed_query_matches_morphological_variants(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`mengatakan` query stems to `kata` and matches `berkata` body."""
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "stem.txt"
+    p.write_text("Dia berkata bahwa hujan turun deras.", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(
+        query="mengatakan", language="id", stem=True
+    )
+    assert result["matches"], "stemmed search should find berkata"
+
+
+def test_search_content_stem_requires_indonesian_language(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """Setting `stem=True` without language='id' raises a clear error."""
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "x.txt"
+    p.write_text("hello", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    with pytest.raises(DokumenPintarError, match="language='id'"):
+        _tool(mcp, "search_content")(query="hi", stem=True)
+
+
+def test_search_content_no_stem_keeps_legacy_behaviour(
+    make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
+) -> None:
+    """`stem=False` (default) does not stem the query."""
+    docs_dir, _ = tmp_roots
+    p = docs_dir / "ns.txt"
+    p.write_text("Dia berkata bahwa hujan", encoding="utf-8")
+    mcp, _ctx = _setup(make_config())
+    result = _tool(mcp, "search_content")(query="mengatakan")
+    # Without stemming, "mengatakan" doesn't appear in the document.
+    assert result["matches"] == []
+
+
+def test_stem_word_handles_empty(tmp_path: Path) -> None:
+    from dokumen_pintar.utils.stemming_id import stem_word
+
+    assert stem_word("") == ""
+    assert stem_word("   ") == "   "
+
+
+def test_stem_text_preserves_acronyms() -> None:
+    """Short uppercase tokens like 'SAP' are preserved as-is (treated as acronyms)."""
+    from dokumen_pintar.utils.stemming_id import stem_text
+
+    out = stem_text("Mengintegrasi data SAP ke sistem")
+    assert "SAP" in out
+
+
+def test_stem_text_handles_empty() -> None:
+    from dokumen_pintar.utils.stemming_id import stem_text
+
+    assert stem_text("") == ""
+
+
+def test_stem_text_lowercases_long_uppercase() -> None:
+    """Tokens longer than 5 chars get lowercased + stemmed even if all-caps."""
+    from dokumen_pintar.utils.stemming_id import stem_text
+
+    out = stem_text("MENGINTEGRASI")
+    assert out == out.lower()

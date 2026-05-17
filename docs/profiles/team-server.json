@@ -1,0 +1,41 @@
+{
+  "$schema": "../config.schema.json",
+  "_profile": "team-server",
+  "_description": "HTTP/SSE transport with bearer-token auth. Single shared workspace mounted writable. Use behind a TLS-terminating reverse proxy (Caddy, nginx, Traefik) - never expose this directly.",
+  "roots": [
+    { "name": "shared", "path": "/srv/dokumen-pintar/shared", "writable": true }
+  ],
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.mcpdocs/**"
+  ],
+  "max_file_size_mb": 100,
+  "versioning": {
+    "enabled": true,
+    "storage_mode": "global",
+    "global_storage_path": "/var/lib/dokumen-pintar/versions",
+    "retention_days": 90,
+    "max_versions_per_file": 50
+  },
+  "audit": {
+    "enabled": true,
+    "log_path": "/var/log/dokumen-pintar/audit.jsonl"
+  },
+  "transport": {
+    "stdio": false,
+    "http": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 7878,
+      "auth_token": "REPLACE_WITH_LONG_RANDOM_TOKEN"
+    }
+  },
+  "safety": {
+    "allow_sensitive": false,
+    "follow_symlinks": false,
+    "validate_roundtrip_writes": true
+  }
+}

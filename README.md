@@ -15,7 +15,7 @@ from any AI agent that supports the <a href="https://modelcontextprotocol.io/">M
   <a href="https://pypi.org/project/dokumen-pintar/"><img alt="PyPI" src="https://img.shields.io/pypi/v/dokumen-pintar?style=for-the-badge&logo=pypi&logoColor=white&labelColor=0b1020&color=1e3a5f"></a>&nbsp;
   <a href="https://python.org"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white&labelColor=0b1020"></a>&nbsp;
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-1e3a5f?style=for-the-badge&labelColor=0b1020"></a>&nbsp;
-  <a href="tests/"><img alt="730 tests passed" src="https://img.shields.io/badge/tests-730%20passed-10b981?style=for-the-badge&logo=pytest&logoColor=white&labelColor=0b1020"></a>&nbsp;
+  <a href="tests/"><img alt="1403 tests passed" src="https://img.shields.io/badge/tests-1403%20passed-10b981?style=for-the-badge&logo=pytest&logoColor=white&labelColor=0b1020"></a>&nbsp;
   <a href="htmlcov/"><img alt="100% coverage" src="https://img.shields.io/badge/coverage-100%25-10b981?style=for-the-badge&labelColor=0b1020"></a>
 </p>
 
@@ -30,10 +30,20 @@ from any AI agent that supports the <a href="https://modelcontextprotocol.io/">M
   <span>&nbsp;&middot;&nbsp;</span>
   <a href="docs/">Docs</a>
   <span>&nbsp;&middot;&nbsp;</span>
-  <a href="#contributing">Contributing</a>
+  <a href="docs/BENCHMARK.md">Benchmark</a>
+  <span>&nbsp;&middot;&nbsp;</span>
+  <a href="AGENTS.md">Contributing</a>
 </p>
 
 <p align="center"><b><a href="README.id.md">Baca dalam Bahasa Indonesia</a></b></p>
+
+---
+
+## Why Dokumen-Pintar
+
+Most filesystem MCP servers stop at "read this file, write that file." Dokumen-Pintar treats documents as **structured data** the AI can navigate. Tell an agent to update a paragraph by index, set a cell by `Sheet1!B2`, walk a JSON tree with JSONPath, generate a DOCX from Markdown - it works the same way across every supported format.
+
+Every mutating tool snapshots the file first. Every action lands in an audit log. Every path is sandboxed to roots you opt in. The default config is sensible; the [profiles](docs/profiles/) cover the rest.
 
 ---
 
@@ -45,24 +55,24 @@ from any AI agent that supports the <a href="https://modelcontextprotocol.io/">M
 
 **Multi-root Sandbox** — Define multiple workspace roots with per-root `writable` control. All paths outside the sandbox are rejected.
 
-**10 Formats** — Plain text, Markdown, JSON, YAML, CSV/TSV, XML/SVG, DOCX, XLSX, PPTX, PDF.
+**10 Formats** — Plain text, Markdown, LaTeX, JSON / YAML, CSV / TSV, XML / SVG, DOCX, XLSX, PPTX, PDF.
 
-**30 MCP Tools** — File & content CRUD, structured access, batch operations, search, versioning — all exposed as callable tools for AI agents.
+**62 MCP Tools** - File & content CRUD, structured access, batch operations, search, versioning, metadata, authoring, image extraction, sections, templates, TOC, bibliography, document compare, lint - all exposed as callable tools.
 
-**Automatic Versioning** — Copy-on-write snapshots on every write operation. Undo, diff, restore, and purge anytime.
+**Authoring** — Generate DOCX or PDF from a JSON spec or Markdown source via `compose_docx` / `compose_pdf` / `compose_from_markdown`.
 
 </td>
 <td width="50%" valign="top">
 
-**Structured Access** — JSONPath for JSON/YAML, XPath for XML, cell/range/sheet for XLSX, paragraph/table for DOCX, slide for PPTX, page for PDF.
+**Structured Access** — JSONPath for JSON / YAML, XPath for XML, cell / range / sheet for XLSX, paragraph / table for DOCX, slide for PPTX, page for PDF.
 
-**Batch Operations** — Mass rename, find-and-replace, and delete with dry-run by default.
+**Automatic Versioning** — Copy-on-write snapshots on every write. Undo, diff, restore, and purge anytime.
 
-**Semantic Search** *(optional)* — Vector search powered by sentence-transformers; enable via config.
+**Metadata Layer** — Read, write, delete, or strip EXIF, OOXML core properties, and PDF docinfo through one consistent API.
 
 **Audit Trail** — Every mutation logged to JSONL with timestamp and operation details.
 
-**2 Transports** — stdio (Claude Desktop, Cursor, VS Code, Windsurf) and HTTP/SSE.
+**2 Transports** — stdio (Claude Desktop, Cursor, VS Code, Windsurf) and HTTP / SSE.
 
 </td>
 </tr>
@@ -255,20 +265,27 @@ version_undo(path="documents:/reports/q1.docx")
 
 ## Tools Overview
 
-**30 MCP tools** organized by category:
+**62 MCP tools** organized by category:
 
 | Category | Tools |
 |:---------|:------|
-| **Workspace** | `workspace_list_roots` · `workspace_stat` · `workspace_tree` |
+| **Workspace** | `workspace_list_roots` · `workspace_stat` · `workspace_tree` · `workspace_diagnose` |
 | **File CRUD** | `file_create` · `file_delete` · `file_rename` · `file_copy` · `file_move` |
-| **Content** | `content_read` · `content_write` · `content_append` · `content_insert` · `content_replace` · `content_patch` |
-| **Structured** | `structured_get` · `structured_set` · `structured_delete` · `structured_meta` |
-| **Batch** | `batch_rename` · `batch_replace_content` · `batch_delete` |
+| **Content** | `content_read` · `content_write` · `content_append` · `content_insert` · `content_replace` · `content_delete_range` · `content_patch` · `content_diff` |
+| **Structured** | `struct_get` · `struct_set` · `struct_delete` · `struct_meta` |
+| **Metadata** | `metadata_read` · `metadata_write` · `metadata_delete` · `metadata_strip` · `metadata_read_batch` |
+| **Authoring** | `validate_spec` · `compose_docx` · `compose_pdf` · `compose_from_markdown` · `compose_to_markdown` |
+| **Sections** | `section_extract` · `section_merge` |
+| **Images** | `image_list` · `image_extract` · `image_extract_all` · `image_replace` |
+| **Templates** | `template_list` · `template_install` · `template_render` · `template_render_named` |
+| **TOC & Bibliography** | `toc_generate` · `bibliography_check` · `bibliography_format` |
+| **Compare & Lint** | `document_compare` · `document_lint` · `document_lint_fix` |
+| **Batch** | `batch_rename` · `batch_replace_content` · `batch_replace_structured` · `batch_delete` |
 | **Search** | `search_filename` · `search_content` · `search_in_format` |
 | **Versioning** | `version_list` · `version_diff` · `version_restore` · `version_undo` · `version_purge` |
-| **Semantic** * | `semantic_index` · `semantic_search` |
+| **Semantic** * | `search_semantic` · `semantic_index_path` · `semantic_stats` |
 
-<sub>* Only available when <code>semantic_search.enabled = true</code> and <code>[semantic]</code> extras are installed.</sub>
+<sub>* Only registered when <code>semantic_search.enabled = true</code> and the <code>[semantic]</code> extra is installed.</sub>
 
 > Full parameter reference: **[docs/TOOLS.md](docs/TOOLS.md)**
 
@@ -307,7 +324,7 @@ pytest
 <table align="center">
 <tr>
   <td align="center" width="25%">
-    <h2>730</h2>
+    <h2>1403</h2>
     <sub>Tests passed</sub>
   </td>
   <td align="center" width="25%">
@@ -315,7 +332,7 @@ pytest
     <sub>Line + branch coverage</sub>
   </td>
   <td align="center" width="25%">
-    <h2>80%</h2>
+    <h2>100%</h2>
     <sub>Minimum threshold</sub>
   </td>
   <td align="center" width="25%">
@@ -327,6 +344,8 @@ pytest
 
 HTML coverage report: `htmlcov/index.html`
 
+> Performance numbers and methodology: **[docs/BENCHMARK.md](docs/BENCHMARK.md)**
+
 ---
 
 ## Documentation
@@ -335,8 +354,11 @@ HTML coverage report: `htmlcov/index.html`
 |:---------|:---------|
 | **[USAGE.md](docs/USAGE.md)** | Workspace URIs, tool examples, practical recipes |
 | **[CONFIG.md](docs/CONFIG.md)** | All config fields with types, defaults, and notes |
-| **[TOOLS.md](docs/TOOLS.md)** | Full reference for all 30 tools |
+| **[TOOLS.md](docs/TOOLS.md)** | Full reference for all 62 tools |
 | **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Module map, request flow, versioning, safety |
+| **[BENCHMARK.md](docs/BENCHMARK.md)** | Performance baselines and methodology |
+| **[profiles/](docs/profiles/)** | Six pre-tuned config profiles (personal, developer, research, ...) |
+| **[AGENTS.md](AGENTS.md)** | Contributor guide: conventions, dev workflow, PR process |
 
 ---
 
@@ -352,7 +374,7 @@ mypy src/dokumen_pintar/    # type check
 pytest                      # test + coverage
 ```
 
-PRs welcome. All tests must pass and coverage must not decrease.
+PRs welcome. All tests must pass and coverage must stay at 100%. Read **[AGENTS.md](AGENTS.md)** before submitting - it covers conventions, the handler protocol, and how to add a new format or tool.
 
 ---
 

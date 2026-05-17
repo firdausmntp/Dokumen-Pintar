@@ -1,0 +1,8 @@
+{
+  "$schema": "../config.schema.json",
+  "_profile": "minimal",
+  "_description": "Single workspace, defaults everywhere. Best for first-time users and one-off sessions.",
+  "roots": [
+    { "name": "docs", "path": "~/Documents", "writable": true }
+  ]
+}

@@ -18,9 +18,25 @@ from dokumen_pintar.handlers.base import (
 )
 
 
-def _load(path: Path, *, data_only: bool = False) -> openpyxl.Workbook:
+def _load(
+    path: Path,
+    *,
+    data_only: bool = False,
+    read_only: bool = False,
+) -> openpyxl.Workbook:
+    """Load a workbook.
+
+    Set ``read_only=True`` for query-only paths (read_text, read_meta,
+    extract_for_search). Read-only mode skips style/formula objects and
+    streams cells via lxml — typically 5-20x faster on large workbooks
+    and uses a fraction of the memory.
+    """
     try:
-        return openpyxl.load_workbook(path, data_only=data_only)
+        return openpyxl.load_workbook(
+            path,
+            data_only=data_only,
+            read_only=read_only,
+        )
     except (InvalidFileException, zipfile.BadZipFile) as exc:
         raise HandlerError(f"invalid xlsx file: {path} ({exc})") from exc
     except OSError as exc:
@@ -81,7 +97,7 @@ class XlsxHandler:
 
     def read_meta(self, path: Path) -> dict[str, Any]:
         stat = path.stat()
-        wb = _load(path)
+        wb = _load(path, read_only=True)
         try:
             sheets: list[dict[str, Any]] = []
             for name in wb.sheetnames:
@@ -105,7 +121,7 @@ class XlsxHandler:
         }
 
     def read_text(self, path: Path, **_: Any) -> str:
-        wb = _load(path)
+        wb = _load(path, read_only=True)
         try:
             parts: list[str] = []
             for name in wb.sheetnames:
@@ -122,7 +138,7 @@ class XlsxHandler:
         raise UnsupportedFormatError("xlsx does not support write_text; use structured_set instead")
 
     def extract_for_search(self, path: Path) -> str:
-        wb = _load(path, data_only=True)
+        wb = _load(path, data_only=True, read_only=True)
         try:
             tokens: list[str] = []
             for name in wb.sheetnames:
@@ -284,7 +300,6 @@ class XlsxHandler:
         finally:
             wb.close()
 
-
     def write_meta(self, path: Path, updates: dict[str, Any]) -> dict[str, Any]:
         wb = _load(path)
         try:
@@ -293,15 +308,12 @@ class XlsxHandler:
             for key, value in updates.items():
                 if key not in self._WRITABLE_PROPS:
                     raise HandlerError(
-                        f"unknown property: {key!r} "
-                        f"(allowed: {list(self._WRITABLE_PROPS)})"
+                        f"unknown property: {key!r} (allowed: {list(self._WRITABLE_PROPS)})"
                     )
                 try:
                     setattr(props, key, value)
                 except (AttributeError, TypeError, ValueError) as exc:
-                    raise HandlerError(
-                        f"failed to set property {key!r}: {exc}"
-                    ) from exc
+                    raise HandlerError(f"failed to set property {key!r}: {exc}") from exc
                 applied[key] = value
             try:
                 wb.save(path)

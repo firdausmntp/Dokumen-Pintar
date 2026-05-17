@@ -57,9 +57,7 @@ def test_batch_replace_content_dry_run(
     docs_dir, _ = tmp_roots
     (docs_dir / "fix.txt").write_text("TODO fix this", encoding="utf-8")
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*.txt", old="TODO", new="DONE", dry_run=True
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*.txt", old="TODO", new="DONE", dry_run=True)
     assert result["dry_run"] is True
     assert result["count"] >= 1
     # Original unchanged
@@ -189,9 +187,7 @@ def test_batch_replace_skips_directories(
     subdir.mkdir()
     (docs_dir / "real.txt").write_text("hello", encoding="utf-8")
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*", old="hello", new="bye", dry_run=False
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*", old="hello", new="bye", dry_run=False)
     assert result["count"] >= 1
 
 
@@ -212,6 +208,7 @@ def test_batch_replace_skips_unreadable_file(
     make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
 ) -> None:
     from unittest.mock import patch
+
     docs_dir, _ = tmp_roots
     (docs_dir / "bad.txt").write_text("hello", encoding="utf-8")
     mcp, ctx = _setup(make_config())
@@ -233,9 +230,7 @@ def test_batch_exclude_pattern(
     cfg = make_config()
     cfg.exclude_patterns = ["node_modules/**"]
     mcp, ctx = _setup(cfg)
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*.txt", old="old", new="new", dry_run=True
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*.txt", old="old", new="new", dry_run=True)
     paths = [f["absolute"] for f in result["files"]]
     assert not any("node_modules" in p for p in paths)
 
@@ -244,19 +239,24 @@ def test_batch_relative_to_valueerror(
     make_config: Callable[..., AppConfig], tmp_roots: tuple[Path, Path]
 ) -> None:
     from unittest.mock import patch as _patch
+
     docs_dir, _ = tmp_roots
     (docs_dir / "ok.txt").write_text("testval", encoding="utf-8")
     cfg = make_config()
     mcp, ctx = _setup(cfg)
     _original_rglob = Path.rglob
+
     def _rglob_with_outside(self, pat):
         yield from _original_rglob(self, pat)
         yield Path("Z:/outside/fake.txt")
+
     _original_is_file = Path.is_file
+
     def _is_file_patched(self):
         if str(self).startswith("Z:"):
             return True
         return _original_is_file(self)
+
     with _patch.object(Path, "rglob", _rglob_with_outside):
         with _patch.object(Path, "is_file", _is_file_patched):
             result = _tool(mcp, "batch_replace_content")(
@@ -276,9 +276,7 @@ def test_batch_replace_content_skips_binary_content(
     (docs_dir / "fake.txt").write_bytes(b"hello\x00world")
     (docs_dir / "real.txt").write_text("hello world", encoding="utf-8")
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*.txt", old="hello", new="HI", dry_run=False
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*.txt", old="hello", new="HI", dry_run=False)
     # Only real.txt should be in plan; fake.txt skipped as binary_content.
     assert all("real.txt" in f["uri"] for f in result["files"])
     assert any(s["reason"] == "binary_content" for s in result.get("skipped", []))
@@ -318,19 +316,30 @@ def test_batch_replace_content_skips_oversized_files(
     big_path.write_text("X" * (int(1.5 * 1024 * 1024)), encoding="utf-8")
     (docs_dir / "small.txt").write_text("X here", encoding="utf-8")
     mcp, _ = _setup(cfg)
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*.txt", old="X", new="Y", dry_run=True
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*.txt", old="X", new="Y", dry_run=True)
     # Big file must be skipped, small file should be planned.
-    skipped_uris = {s["uri"] for s in result.get("skipped", []) if s["reason"] == "exceeds_max_file_size"}
+    skipped_uris = {
+        s["uri"] for s in result.get("skipped", []) if s["reason"] == "exceeds_max_file_size"
+    }
     assert any("big.txt" in u for u in skipped_uris)
 
 
 def test_looks_binary_returns_true_on_oserror(tmp_path: Path) -> None:
     from dokumen_pintar.tools.batch import _looks_binary
 
-    # Path to a non-existent file should produce OSError on open and return True.
-    assert _looks_binary(tmp_path / "does_not_exist.bin") is True
+    # Use an extension NOT in the known-binary fast-path so the function
+    # actually reaches the open()/read() probe and the OSError branch.
+    assert _looks_binary(tmp_path / "does_not_exist.unknownext") is True
+
+
+def test_looks_binary_known_extension_short_circuits(tmp_path: Path) -> None:
+    """Known binary extensions return True without opening the file."""
+    from dokumen_pintar.tools.batch import _looks_binary
+
+    # Path doesn't exist, but the extension fast-path returns before any I/O.
+    assert _looks_binary(tmp_path / "missing.docx") is True
+    assert _looks_binary(tmp_path / "missing.png") is True
+    assert _looks_binary(tmp_path / "missing.zip") is True
 
 
 # ── A1 regression: glob URI-prefix normalization ──
@@ -380,9 +389,7 @@ def test_batch_replace_skipped_summary_present(
         d.add_paragraph("hello")
         d.save(str(p))
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_content")(
-        glob="*.docx", old="hello", new="HI", dry_run=True
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="*.docx", old="hello", new="HI", dry_run=True)
     assert result["count"] == 0
     assert result.get("skipped_summary", {}).get("binary_format") == 2
 
@@ -417,9 +424,7 @@ def test_batch_empty_glob_returns_zero(
     docs_dir, _ = tmp_roots
     (docs_dir / "a.txt").write_text("x", encoding="utf-8")
     mcp, _ = _setup(make_config())
-    result = _tool(mcp, "batch_replace_content")(
-        glob="", old="x", new="y", dry_run=True
-    )
+    result = _tool(mcp, "batch_replace_content")(glob="", old="x", new="y", dry_run=True)
     assert result["count"] == 0
 
 

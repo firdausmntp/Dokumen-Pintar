@@ -18,32 +18,131 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..context import AppContext
-from ..errors import UnsupportedFormatError
+from ..errors import UnsupportedFormatError, ValidationError
 from ..utils.locks import file_lock
 from .batch import _iter_writable_files  # reuse glob iteration
 
 
 _SUPPORTED_FORMATS = frozenset({"docx", "xlsx", "pptx"})
 
+# Scope shape per format. Validated up-front so callers get a clear error
+# when they pass a key that the underlying replacer can't act on.
+_DOCX_SCOPE_KEYS = frozenset(
+    {
+        "headings_only",
+        "tables_only",
+        "paragraph_range",
+        "heading_section",
+        "exclude_styles",
+        "include_styles",
+    }
+)
+_XLSX_SCOPE_KEYS = frozenset({"sheets", "cell_range"})
+_PPTX_SCOPE_KEYS = frozenset({"slides"})
+
+
+def _validate_scope(scope: dict[str, Any] | None, fmt: str) -> dict[str, Any]:
+    """Return a normalised scope dict. Empty/None = match everything."""
+    if scope is None:
+        return {}
+    if not isinstance(scope, dict):
+        raise ValidationError("scope must be a dict")
+    allowed = {
+        "docx": _DOCX_SCOPE_KEYS,
+        "xlsx": _XLSX_SCOPE_KEYS,
+        "pptx": _PPTX_SCOPE_KEYS,
+    }.get(fmt, frozenset())
+    unknown = set(scope) - allowed
+    if unknown:
+        raise ValidationError(
+            f"unsupported scope keys for {fmt}: {sorted(unknown)} (allowed: {sorted(allowed)})"
+        )
+    return scope
+
+
+def _docx_paragraph_in_section(doc: Any, idx: int, section: str) -> bool:
+    """True if paragraph ``idx`` falls under a heading whose text matches ``section``."""
+    rx = re.compile(section)
+    current_level: int | None = None
+    in_section = False
+    for i, para in enumerate(doc.paragraphs):
+        style_name = (getattr(getattr(para, "style", None), "name", None) or "").strip()
+        m = re.match(r"^[Hh]eading\s+(\d+)$", style_name)
+        if m:
+            level = int(m.group(1))
+            text = (para.text or "").strip()
+            if rx.search(text):
+                current_level = level
+                in_section = True
+            elif current_level is not None and level <= current_level:  # pragma: no branch
+                in_section = False
+                current_level = None
+        if i == idx:
+            return in_section
+    return False  # pragma: no cover - idx must always exist within the loop
+
+
+def _docx_paragraph_passes_scope(doc: Any, idx: int, para: Any, scope: dict[str, Any]) -> bool:
+    """Return True if the paragraph at ``idx`` should be touched."""
+    if not scope:
+        return True
+    if scope.get("tables_only"):
+        return False  # paragraphs are skipped when only tables are in scope
+    style_name = (getattr(getattr(para, "style", None), "name", None) or "").strip()
+    if scope.get("headings_only"):
+        if not re.match(r"^[Hh]eading\s+\d+$", style_name):
+            return False
+    rng = scope.get("paragraph_range")
+    if rng is not None:
+        if not (int(rng[0]) <= idx <= int(rng[1])):
+            return False
+    inc = scope.get("include_styles")
+    if inc is not None and style_name not in set(inc):
+        return False
+    exc = scope.get("exclude_styles")
+    if exc is not None and style_name in set(exc):
+        return False
+    section = scope.get("heading_section")
+    if section is not None and not _docx_paragraph_in_section(doc, idx, section):
+        return False
+    return True
+
+
+def _docx_table_cell_passes_scope(scope: dict[str, Any]) -> bool:
+    """Tables are always in scope unless `headings_only` excludes them."""
+    if not scope:
+        return True
+    if scope.get("headings_only"):
+        return False
+    return True
+
 
 def _replace_in_docx(
-    path: Path, pattern: re.Pattern[str], repl: str, *, apply: bool
+    path: Path,
+    pattern: re.Pattern[str],
+    repl: str,
+    *,
+    apply: bool,
+    scope: dict[str, Any] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     from docx import Document
 
     doc = Document(str(path))
+    scope = scope or {}
     total = 0
     locations: list[dict[str, Any]] = []
 
     for idx, para in enumerate(doc.paragraphs):
         if not para.text:
             continue
+        if not _docx_paragraph_passes_scope(doc, idx, para, scope):
+            continue
         new_text, n = pattern.subn(repl, para.text)
         if n > 0:
             total += n
             locations.append({"kind": "paragraph", "index": idx, "matches": n})
             if apply:
-                # Replace the entire paragraph text — preserves the
+                # Replace the entire paragraph text - preserves the
                 # paragraph's style; per-run formatting inside is lost
                 # (rare for plain text replace, acceptable trade-off).
                 for run in list(para.runs):
@@ -55,25 +154,26 @@ def _replace_in_docx(
                     # only via raw OXML, never via the normal authoring path.
                     para.add_run(new_text)
 
-    for t_idx, table in enumerate(doc.tables):
-        for r_idx, row in enumerate(table.rows):
-            for c_idx, cell in enumerate(row.cells):
-                if not cell.text:
-                    continue
-                new_text, n = pattern.subn(repl, cell.text)
-                if n > 0:
-                    total += n
-                    locations.append(
-                        {
-                            "kind": "table_cell",
-                            "table": t_idx,
-                            "row": r_idx,
-                            "col": c_idx,
-                            "matches": n,
-                        }
-                    )
-                    if apply:
-                        cell.text = new_text
+    if _docx_table_cell_passes_scope(scope):
+        for t_idx, table in enumerate(doc.tables):
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    if not cell.text:
+                        continue
+                    new_text, n = pattern.subn(repl, cell.text)
+                    if n > 0:
+                        total += n
+                        locations.append(
+                            {
+                                "kind": "table_cell",
+                                "table": t_idx,
+                                "row": r_idx,
+                                "col": c_idx,
+                                "matches": n,
+                            }
+                        )
+                        if apply:
+                            cell.text = new_text
 
     if apply and total > 0:
         doc.save(str(path))
@@ -81,20 +181,56 @@ def _replace_in_docx(
     return total, locations
 
 
+def _xlsx_cell_in_range(coord: str, ref_range: str) -> bool:
+    """True if ``coord`` (e.g. ``B2``) falls inside ``ref_range`` (e.g. ``A1:E100``)."""
+    from openpyxl.utils import column_index_from_string
+    from openpyxl.utils.cell import coordinate_from_string
+
+    parts = ref_range.split(":")
+    if len(parts) != 2:
+        raise ValidationError(f"invalid cell_range: {ref_range!r}")
+    try:
+        c0_letter, c0_row = coordinate_from_string(parts[0])
+        c1_letter, c1_row = coordinate_from_string(parts[1])
+        cur_letter, cur_row = coordinate_from_string(coord)
+    except Exception as exc:  # noqa: BLE001 - openpyxl uses CellCoordinatesException
+        raise ValidationError(f"invalid cell coordinate: {exc}") from exc
+    c0 = column_index_from_string(c0_letter)
+    c1 = column_index_from_string(c1_letter)
+    cur = column_index_from_string(cur_letter)
+    return min(c0, c1) <= cur <= max(c0, c1) and min(c0_row, c1_row) <= cur_row <= max(
+        c0_row, c1_row
+    )
+
+
 def _replace_in_xlsx(
-    path: Path, pattern: re.Pattern[str], repl: str, *, apply: bool
+    path: Path,
+    pattern: re.Pattern[str],
+    repl: str,
+    *,
+    apply: bool,
+    scope: dict[str, Any] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     import openpyxl
 
     wb = openpyxl.load_workbook(str(path))
+    scope = scope or {}
     total = 0
     locations: list[dict[str, Any]] = []
+    sheet_filter = set(scope["sheets"]) if scope.get("sheets") is not None else None
+    cell_range = scope.get("cell_range")
     try:
         for ws in wb.worksheets:
+            if sheet_filter is not None and ws.title not in sheet_filter:
+                continue
             for row in ws.iter_rows():
                 for cell in row:
                     val = cell.value
                     if not isinstance(val, str) or not val:
+                        continue
+                    if cell_range is not None and not _xlsx_cell_in_range(
+                        cell.coordinate, cell_range
+                    ):
                         continue
                     new_val, n = pattern.subn(repl, val)
                     if n > 0:
@@ -118,15 +254,24 @@ def _replace_in_xlsx(
 
 
 def _replace_in_pptx(
-    path: Path, pattern: re.Pattern[str], repl: str, *, apply: bool
+    path: Path,
+    pattern: re.Pattern[str],
+    repl: str,
+    *,
+    apply: bool,
+    scope: dict[str, Any] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     from pptx import Presentation
 
     prs = Presentation(str(path))
+    scope = scope or {}
     total = 0
     locations: list[dict[str, Any]] = []
+    slide_filter = set(int(i) for i in scope["slides"]) if scope.get("slides") is not None else None
 
     for s_idx, slide in enumerate(prs.slides):
+        if slide_filter is not None and s_idx not in slide_filter:
+            continue
         for sh_idx, shape in enumerate(slide.shapes):
             tf = getattr(shape, "text_frame", None)
             if tf is None:
@@ -173,7 +318,12 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
             "paragraphs, table cells, spreadsheet cells, and slide text "
             "frames via the native writer (no raw bytes), so the binary "
             "container stays valid. `regex=False` and `case_sensitive=True` "
-            "by default. Always snapshots pre+post when applying."
+            "by default. Always snapshots pre+post when applying. "
+            "Pass `scope` to restrict the replace to a subset of the doc: "
+            "DOCX accepts {headings_only, tables_only, paragraph_range, "
+            "heading_section, exclude_styles, include_styles}; "
+            "XLSX accepts {sheets, cell_range}; "
+            "PPTX accepts {slides}."
         ),
     )
     def batch_replace_structured(
@@ -183,6 +333,7 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
         regex: bool = False,
         dry_run: bool = True,
         case_sensitive: bool = True,
+        scope: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         flags = 0 if case_sensitive else re.IGNORECASE
         pattern = re.compile(old if regex else re.escape(old), flags)
@@ -197,16 +348,30 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
                 skipped.append({"uri": uri, "reason": "format_not_supported"})
                 continue
 
+            # Validate scope per-format up-front for a clear error message.
+            try:
+                normalised_scope = _validate_scope(scope, handler.name)
+            except ValidationError:
+                raise
+
             # Step 1 — always do a no-write pass first so we can pre-snapshot
             # before mutating, and so dry runs are completely side-effect-free.
             try:
                 if handler.name == "docx":
-                    total, locs = _replace_in_docx(p, pattern, new, apply=False)
+                    total, locs = _replace_in_docx(
+                        p, pattern, new, apply=False, scope=normalised_scope
+                    )
                 elif handler.name == "xlsx":
-                    total, locs = _replace_in_xlsx(p, pattern, new, apply=False)
+                    total, locs = _replace_in_xlsx(
+                        p, pattern, new, apply=False, scope=normalised_scope
+                    )
                 else:  # pptx
-                    total, locs = _replace_in_pptx(p, pattern, new, apply=False)
+                    total, locs = _replace_in_pptx(
+                        p, pattern, new, apply=False, scope=normalised_scope
+                    )
             except UnsupportedFormatError:
+                raise
+            except ValidationError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 skipped.append({"uri": uri, "reason": "render_failed", "error": str(exc)})
@@ -242,17 +407,15 @@ def register(mcp: FastMCP, ctx: AppContext) -> None:
                 # Step 2 — apply.
                 try:
                     if handler.name == "docx":
-                        _replace_in_docx(p, pattern, new, apply=True)
+                        _replace_in_docx(p, pattern, new, apply=True, scope=normalised_scope)
                     elif handler.name == "xlsx":
-                        _replace_in_xlsx(p, pattern, new, apply=True)
+                        _replace_in_xlsx(p, pattern, new, apply=True, scope=normalised_scope)
                     else:  # pptx
-                        _replace_in_pptx(p, pattern, new, apply=True)
+                        _replace_in_pptx(p, pattern, new, apply=True, scope=normalised_scope)
                 except Exception as exc:  # noqa: BLE001
                     # Demote planned entry into skipped on apply failure.
                     plan.pop()
-                    skipped.append(
-                        {"uri": uri, "reason": "apply_failed", "error": str(exc)}
-                    )
+                    skipped.append({"uri": uri, "reason": "apply_failed", "error": str(exc)})
                     continue
                 try:
                     ctx.versions.snapshot(
